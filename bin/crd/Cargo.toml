@@ -1,0 +1,9 @@
+[package]
+name = "crd"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+kube = { workspace = true }
+serde_yaml = { workspace = true }
+scheduled-cronjob = { workspace = true }
