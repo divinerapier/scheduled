@@ -16,3 +16,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[[bin]]
+name = "controller"
+path = "src/main.rs"

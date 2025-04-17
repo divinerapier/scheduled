@@ -2,7 +2,10 @@ use k8s_openapi::api::{
     batch::v1::{CronJobSpec, JobSpec, JobTemplateSpec},
     core::v1::{Container, PodSpec, PodTemplateSpec},
 };
-use kube::{Api, api::ObjectMeta};
+use kube::{
+    Api, ResourceExt as _,
+    api::{DeleteParams, ObjectMeta},
+};
 use scheduled_cronjob::{ScheduledCronJob, ScheduledCronJobSpec};
 
 #[tokio::main]
@@ -16,8 +19,8 @@ async fn main() {
             ..Default::default()
         },
         spec: ScheduledCronJobSpec::new(
-            "2025-04-16T17:44:00+08:00".to_string(),
-            "2025-04-16T19:04:00+08:00".to_string(),
+            "2025-04-16T17:44:00+08:00",
+            "2025-04-16T17:45:00+08:00",
             CronJobSpec {
                 schedule: "* * * * *".to_string(),
                 concurrency_policy: Some("Forbid".to_string()),
@@ -51,12 +54,13 @@ async fn main() {
                 },
                 ..Default::default()
             },
-        ),
+        )
+        .unwrap(),
         status: None,
     };
 
-    Api::<ScheduledCronJob>::namespaced(client.clone(), "default")
-        .create(&Default::default(), &cronjob)
-        .await
-        .unwrap();
+    let api = Api::<ScheduledCronJob>::namespaced(client.clone(), "default");
+    api.delete(&cronjob.name_any(), &DeleteParams::foreground())
+        .await;
+    api.create(&Default::default(), &cronjob).await.unwrap();
 }

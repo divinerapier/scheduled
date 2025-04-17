@@ -1,7 +1,9 @@
-use chrono::{DateTime, Local};
+use crate::crd::IntoTime;
+use chrono::{DateTime, Duration, Local};
 use k8s_openapi::api::batch::v1::{CronJob, CronJobSpec};
-use kube::Resource as _;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kube::core::object::HasStatus;
+use kube::{CELSchema, Resource as _};
 use kube::{CustomResource, ResourceExt, api::ObjectMeta};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -42,77 +44,98 @@ impl ScheduledCronJobPhase {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ScheduledCronJobStatus {
     pub phase: ScheduledCronJobPhase,
     pub message: Option<String>,
-    pub last_update_time: Option<String>,
+    pub last_update_time: Option<Time>,
 }
 
-#[derive(Debug, Serialize, Deserialize, CustomResource, Default, Clone, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, CELSchema, CustomResource, Default, Clone)]
 #[kube(
     group = "batch.divinerapier.io",
     version = "v1alpha1",
     kind = "ScheduledCronJob",
-    namespaced
+    namespaced,
+    printcolumn = r#"{"name":"StartTime", "type":"string", "description":"start time of the job", "jsonPath":".spec.startTime"}"#,
+    printcolumn = r#"{"name":"EndTime", "type":"string", "description":"end time of the job", "jsonPath":".spec.endTime"}"#,
+    printcolumn = r#"{"name":"Phase", "type":"string", "description":"phase of the job", "jsonPath":".status.phase"}"#,
+    status = "ScheduledCronJobStatus",
+    shortname = "scj"
 )]
-#[kube(status = "ScheduledCronJobStatus")]
+#[cel_validate(rule = Rule::new("(!has(self.startTime) && !has(self.endTime)) || (!has(self.startTime) && has(self.endTime)) || (has(self.startTime) && !has(self.endTime)) || (has(self.startTime) && has(self.endTime) && self.startTime < self.endTime)")
+.message(Message::Message("Invalid time range".to_string()))
+.reason(Reason::FieldValueForbidden))]
+#[cel_validate(rule = Rule::new("has(self.spec.concurrencyPolicy) && (self.spec.concurrencyPolicy in ['Allow', 'Forbid', 'Replace'])").message("Invalid concurrency policy").reason(Reason::FieldValueInvalid))]
+#[cel_validate(rule = Rule::new("has(self.spec.failedJobsHistoryLimit) && self.spec.failedJobsHistoryLimit >= 0").message("Invalid failed jobs history limit").reason(Reason::FieldValueInvalid))]
+#[cel_validate(rule = Rule::new("has(self.spec.successfulJobsHistoryLimit) && self.spec.successfulJobsHistoryLimit >= 0").message("Invalid successful jobs history limit").reason(Reason::FieldValueInvalid))]
+#[cel_validate(rule = Rule::new("has(self.spec.jobTemplate.spec.backoffLimit) && self.spec.jobTemplate.spec.backoffLimit >= 0").message("Invalid backoff limit").reason(Reason::FieldValueInvalid))]
+#[cel_validate(rule = Rule::new("has(self.spec.jobTemplate.spec.template.spec.containers) && self.spec.jobTemplate.spec.template.spec.containers.size() > 0").message("Invalid containers").reason(Reason::FieldValueRequired))]
+#[cel_validate(rule = Rule::new("has(self.spec.jobTemplate.spec.template.spec.restartPolicy) && self.spec.jobTemplate.spec.template.spec.restartPolicy in ['Always', 'OnFailure', 'Never']").message("Invalid restart policy").reason(Reason::FieldValueInvalid))]
 #[serde(rename_all = "camelCase")]
 pub struct ScheduledCronJobSpec {
-    start_time: Option<String>,
-    end_time: Option<String>,
+    start_time: Option<Time>,
+    end_time: Option<Time>,
+
     pub spec: CronJobSpec,
 }
 
 impl ScheduledCronJobSpec {
-    pub fn new<S, E>(start_time: S, end_time: E, spec: CronJobSpec) -> Self
+    pub fn new<S, E>(
+        start_time: S,
+        end_time: E,
+        spec: CronJobSpec,
+    ) -> Result<Self, chrono::ParseError>
     where
-        S: Into<Option<String>>,
-        E: Into<Option<String>>,
+        S: IntoTime,
+        E: IntoTime,
     {
-        Self {
-            start_time: start_time.into(),
-            end_time: end_time.into(),
+        Ok(Self {
+            start_time: start_time.into_time()?,
+            end_time: end_time.into_time()?,
             spec,
-        }
+        })
     }
 }
 
 impl ScheduledCronJob {
     pub fn cronjob(&self) -> CronJob {
-        let namespace = self.namespace().unwrap_or_default();
-        let name = self.name_any();
-        let mut cronjob = CronJobBuilder::new()
-            .with_namespace(namespace)
-            .with_name(name)
-            .with_spec(self.spec.spec.clone())
-            .build();
-
-        let oref = self.controller_owner_ref(&()).unwrap();
-        cronjob.metadata.owner_references = Some(vec![oref]);
-        cronjob
+        CronJob {
+            metadata: ObjectMeta {
+                namespace: Some(self.namespace().unwrap_or_default()),
+                name: Some(self.name_any()),
+                annotations: Some(self.annotations().clone()),
+                labels: Some(self.labels().clone()),
+                owner_references: Some(vec![self.controller_owner_ref(&()).unwrap()]),
+                ..Default::default()
+            },
+            spec: Some(self.spec.spec.clone()),
+            status: None,
+        }
     }
 
-    pub fn start_time(&self) -> Result<Option<DateTime<Local>>, chrono::ParseError> {
-        parse_time(self.spec.start_time.as_deref())
+    pub fn start_time(&self) -> Option<DateTime<Local>> {
+        let start_time = self.spec.start_time.as_ref()?;
+        Some(start_time.0.with_timezone(&Local))
     }
 
-    pub fn end_time(&self) -> Result<Option<DateTime<Local>>, chrono::ParseError> {
-        parse_time(self.spec.end_time.as_deref())
+    pub fn end_time(&self) -> Option<DateTime<Local>> {
+        let end_time = self.spec.end_time.as_ref()?;
+        Some(end_time.0.with_timezone(&Local))
     }
 
     pub fn validate_effective_time(&self) -> Result<(), crate::Error> {
-        let start_time = self
-            .start_time()
-            .map_err(|_| crate::Error::InvalidStartTime)?;
-        let end_time = self.end_time().map_err(|_| crate::Error::InvalidEndTime)?;
-
+        let start_time = self.start_time();
+        let end_time = self.end_time();
         let now = Local::now();
 
         if let (Some(start_time), Some(end_time)) = (start_time, end_time) {
-            if start_time > end_time {
+            if start_time >= end_time {
                 return Err(crate::Error::EndBeforeStart);
+            }
+            if end_time - start_time < Duration::minutes(5) {
+                return Err(crate::Error::DurationTooShort(start_time, end_time));
             }
         }
 
@@ -152,7 +175,7 @@ impl ScheduledCronJob {
     pub fn validate_cronjob(&self) -> Result<(), crate::Error> {
         let spec = &self.spec.spec;
         match spec.concurrency_policy.as_deref() {
-            Some("Forbid") | Some("Allow") | None => {}
+            Some("Forbid") | Some("Allow") | Some("Replace") | None => {}
             _ => {
                 return Err(crate::Error::InvalidConcurrencyPolicy);
             }
@@ -170,10 +193,10 @@ impl ScheduledCronJob {
             return Err(crate::Error::CronjobSpecNotFound);
         };
 
-        if let Some(backoff_limit) = spec.backoff_limit
-            && backoff_limit < 0
-        {
-            return Err(crate::Error::InvalidBackoffLimit);
+        if let Some(backoff_limit) = spec.backoff_limit {
+            if backoff_limit < 0 {
+                return Err(crate::Error::InvalidBackoffLimit);
+            }
         }
 
         let Some(spec) = &spec.template.spec else {
@@ -185,15 +208,6 @@ impl ScheduledCronJob {
         }
 
         Ok(())
-    }
-}
-
-fn parse_time(time: Option<&str>) -> Result<Option<DateTime<Local>>, chrono::ParseError> {
-    match time {
-        Some(time) => Ok(Some(
-            DateTime::parse_from_rfc3339(&time)?.with_timezone(&Local),
-        )),
-        None => Ok(None),
     }
 }
 
@@ -230,26 +244,4 @@ impl CronJobBuilder {
             ..Default::default()
         }
     }
-}
-
-#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
-pub struct DelayedJobStatus {
-    pub phase: Option<String>,
-    pub message: Option<String>,
-    pub last_update_time: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, CustomResource, Default, Clone, JsonSchema)]
-#[kube(
-    group = "batch.divinerapier.io",
-    version = "v1alpha1",
-    kind = "DelayedJob",
-    namespaced
-)]
-#[kube(status = "DelayedJobStatus")]
-#[serde(rename_all = "camelCase")]
-pub struct DelayedJobSpec {
-    start_time: Option<String>,
-    end_time: Option<String>,
-    pub spec: CronJobSpec,
 }

@@ -14,3 +14,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+[lib]
+name = "scheduled_cronjob"
+path = "src/lib.rs"

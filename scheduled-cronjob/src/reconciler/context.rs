@@ -1,7 +1,9 @@
 use std::ops::Deref;
 
 use crate::ScheduledCronJobStatus;
-use crate::crd::{ScheduledCronJob, ScheduledCronJobPhase};
+use crate::crd::{
+    DelayedJob, DelayedJobPhase, DelayedJobStatus, ScheduledCronJob, ScheduledCronJobPhase,
+};
 use chrono::Utc;
 use k8s_openapi::NamespaceResourceScope;
 use k8s_openapi::api::batch::v1::CronJob;
@@ -79,7 +81,7 @@ impl Context {
         self.create(namespace, object).await
     }
 
-    pub async fn update(
+    pub async fn update_scheduled_cronjob(
         &self,
         resource: &ScheduledCronJob,
         status: ScheduledCronJobPhase,
@@ -93,17 +95,17 @@ impl Context {
             message = message,
             "Updating status for scheduled cronjob",
         );
-        self.create_event(resource, event_type, status.as_str(), message)
-            .await
-            .unwrap();
-        self.update_status(resource, status, message).await.unwrap();
+        self.create_scheduled_cronjob_event(resource, event_type, status.as_str(), message)
+            .await?;
+        self.update_scheduled_cronjob_status(resource, status, message)
+            .await?;
         Ok(())
     }
 
-    pub async fn update_status(
+    pub async fn update_scheduled_cronjob_status(
         &self,
         resource: &ScheduledCronJob,
-        status: ScheduledCronJobPhase,
+        phase: ScheduledCronJobPhase,
         message: &str,
     ) -> Result<(), crate::Error> {
         let namespace = resource.namespace().unwrap_or_default();
@@ -116,12 +118,12 @@ impl Context {
             Err(e) => return Err(crate::Error::Kube(e)),
         };
         resource.status = Some(ScheduledCronJobStatus {
-            phase: status,
+            phase,
             message: Some(message.to_string()),
-            last_update_time: Some(Utc::now().to_rfc3339()),
+            last_update_time: Some(Time(Utc::now())),
         });
 
-        assert_eq!(resource.status().unwrap().phase, status);
+        assert_eq!(resource.status().unwrap().phase, phase);
         assert_eq!(
             resource.status().unwrap().message,
             Some(message.to_string())
@@ -133,7 +135,7 @@ impl Context {
         Ok(())
     }
 
-    pub async fn create_event(
+    pub async fn create_scheduled_cronjob_event(
         &self,
         resource: &ScheduledCronJob,
         event_type: &str,
@@ -161,6 +163,119 @@ impl Context {
             first_timestamp: Some(Time(now)),
             involved_object: k8s_openapi::api::core::v1::ObjectReference {
                 kind: Some("ScheduledCronJob".to_string()),
+                namespace: Some(namespace),
+                name: Some(name),
+                api_version: Some(api_version.to_string()),
+                uid: resource.metadata.uid.clone(),
+                ..Default::default()
+            },
+            last_timestamp: Some(Time(now)),
+            message: Some(message.to_string()),
+            reason: Some(reason.to_string()),
+            reporting_component: Some("scheduled-cronjob".to_string()),
+            reporting_instance: Some("scheduled-cronjob-controller".to_string()),
+            type_: Some(event_type.to_string()),
+            series: Some(EventSeries {
+                count: Some(1),
+                last_observed_time: Some(MicroTime(now)),
+                ..Default::default()
+            }),
+            source: Some(k8s_openapi::api::core::v1::EventSource {
+                component: Some("scheduled-cronjob".to_string()),
+                ..Default::default()
+            }),
+            related: None,
+        };
+
+        match api.create(&PostParams::default(), &event).await {
+            Ok(_) => Ok(()),
+            Err(KubeError::Api(e)) if e.code == 409 => Ok(()),
+            Err(e) => Err(crate::Error::Kube(e)),
+        }
+    }
+
+    pub async fn update_delayed_job(
+        &self,
+        resource: &DelayedJob,
+        status: DelayedJobPhase,
+        event_type: &str,
+        message: &str,
+    ) -> Result<(), crate::Error> {
+        tracing::info!(
+            name = resource.name_any(),
+            namespace = resource.namespace().unwrap_or_default(),
+            status = status.as_str(),
+            message = message,
+            "Updating status for scheduled cronjob",
+        );
+        self.create_delayed_job_event(resource, event_type, status.as_str(), message)
+            .await?;
+        self.update_delayed_job_status(resource, status, message)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn update_delayed_job_status(
+        &self,
+        resource: &DelayedJob,
+        phase: DelayedJobPhase,
+        message: &str,
+    ) -> Result<(), crate::Error> {
+        let namespace = resource.namespace().unwrap_or_default();
+        let name = resource.name_any();
+        let api = Api::<DelayedJob>::namespaced(self.client.clone(), &namespace);
+
+        let mut resource = match api.get(&name).await {
+            Ok(resource) => resource,
+            Err(KubeError::Api(e)) if e.code == 404 => return Ok(()),
+            Err(e) => return Err(crate::Error::Kube(e)),
+        };
+        resource.status = Some(DelayedJobStatus {
+            phase,
+            message: Some(message.to_string()),
+            last_update_time: Some(Time(Utc::now())),
+        });
+
+        assert_eq!(resource.status().unwrap().phase, phase);
+        assert_eq!(
+            resource.status().unwrap().message,
+            Some(message.to_string())
+        );
+
+        let bytes = serde_json::to_vec(&resource)?;
+        api.replace_status(&name, &PostParams::default(), bytes)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn create_delayed_job_event(
+        &self,
+        resource: &DelayedJob,
+        event_type: &str,
+        reason: &str,
+        message: &str,
+    ) -> Result<(), crate::Error> {
+        let namespace = resource.namespace().unwrap_or_default();
+        let name = resource.name_any();
+        let api = Api::<Event>::namespaced(self.client.clone(), &namespace);
+        let now = Utc::now();
+
+        let api_version = DelayedJob::api_version(&());
+
+        assert_eq!(api_version, "batch.divinerapier.io/v1alpha1");
+
+        let event = Event {
+            metadata: ObjectMeta {
+                name: Some(format!("{}-{}", name, now.timestamp())),
+                namespace: Some(namespace.clone()),
+                ..Default::default()
+            },
+            action: Some("Reconciling".to_string()),
+            count: Some(1),
+            event_time: Some(MicroTime(now)),
+            first_timestamp: Some(Time(now)),
+            involved_object: k8s_openapi::api::core::v1::ObjectReference {
+                kind: Some("DelayedJob".to_string()),
                 namespace: Some(namespace),
                 name: Some(name),
                 api_version: Some(api_version.to_string()),

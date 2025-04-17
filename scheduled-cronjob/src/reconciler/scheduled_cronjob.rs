@@ -6,10 +6,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{Context, Error, ScheduledCronJob, crd::ScheduledCronJobPhase};
 
-pub async fn reconcile_scheduled_cronjob(
-    job: Arc<ScheduledCronJob>,
-    ctx: Arc<Context>,
-) -> Result<Action, Error> {
+pub async fn reconcile(job: Arc<ScheduledCronJob>, ctx: Arc<Context>) -> Result<Action, Error> {
     let name = job.name_any();
     let namespace = job.namespace().unwrap_or_default();
     info!(name, namespace, "Starting reconciliation");
@@ -29,7 +26,7 @@ pub async fn reconcile_scheduled_cronjob(
         }
         Err(Error::InvalidStartTime) => {
             warn!(name, namespace, "Invalid start time specified");
-            ctx.update(
+            ctx.update_scheduled_cronjob(
                 &job,
                 ScheduledCronJobPhase::InvalidStartTime,
                 "Warning",
@@ -40,7 +37,7 @@ pub async fn reconcile_scheduled_cronjob(
         }
         Err(Error::InvalidEndTime) => {
             warn!(name, namespace, "Invalid end time specified");
-            ctx.update(
+            ctx.update_scheduled_cronjob(
                 &job,
                 ScheduledCronJobPhase::InvalidEndTime,
                 "Warning",
@@ -51,7 +48,7 @@ pub async fn reconcile_scheduled_cronjob(
         }
         Err(Error::EndBeforeStart) => {
             warn!(name, namespace, "End time is before start time");
-            ctx.update(
+            ctx.update_scheduled_cronjob(
                 &job,
                 ScheduledCronJobPhase::EndBeforeStart,
                 "Warning",
@@ -61,7 +58,7 @@ pub async fn reconcile_scheduled_cronjob(
             Ok(Action::await_change())
         }
         Err(Error::WaitFor(duration)) => {
-            ctx.update(
+            ctx.update_scheduled_cronjob(
                 &job,
                 ScheduledCronJobPhase::Pending,
                 "Normal",
@@ -79,7 +76,7 @@ pub async fn reconcile_scheduled_cronjob(
             info!(name, namespace, "Schedule has completed");
             ctx.delete::<CronJob>(&namespace, &name).await?;
 
-            ctx.update(
+            ctx.update_scheduled_cronjob(
                 &job,
                 ScheduledCronJobPhase::Completed,
                 "Normal",
@@ -91,7 +88,7 @@ pub async fn reconcile_scheduled_cronjob(
         }
         Err(Error::Kube(e)) => {
             error!(name, namespace, error = ?e, "Kubernetes API error");
-            ctx.update(
+            ctx.update_scheduled_cronjob(
                 &job,
                 ScheduledCronJobPhase::Failed,
                 "Warning",
@@ -103,7 +100,7 @@ pub async fn reconcile_scheduled_cronjob(
         }
         Err(Error::Serialization(e)) => {
             error!(name, namespace, error = ?e, "Serialization error");
-            ctx.update(
+            ctx.update_scheduled_cronjob(
                 &job,
                 ScheduledCronJobPhase::Failed,
                 "Warning",
@@ -114,7 +111,7 @@ pub async fn reconcile_scheduled_cronjob(
         }
         Err(Error::InvalidConcurrencyPolicy) => {
             warn!(name, namespace, "Invalid concurrency policy");
-            ctx.update(
+            ctx.update_scheduled_cronjob(
                 &job,
                 ScheduledCronJobPhase::Failed,
                 "Warning",
@@ -125,7 +122,7 @@ pub async fn reconcile_scheduled_cronjob(
         }
         Err(Error::InvalidFailedJobsHistoryLimit) => {
             warn!(name, namespace, "Invalid failed jobs history limit");
-            ctx.update(
+            ctx.update_scheduled_cronjob(
                 &job,
                 ScheduledCronJobPhase::Failed,
                 "Warning",
@@ -136,7 +133,7 @@ pub async fn reconcile_scheduled_cronjob(
         }
         Err(Error::CronjobSpecNotFound) => {
             warn!(name, namespace, "Cronjob spec not found");
-            ctx.update(
+            ctx.update_scheduled_cronjob(
                 &job,
                 ScheduledCronJobPhase::Failed,
                 "Warning",
@@ -147,11 +144,22 @@ pub async fn reconcile_scheduled_cronjob(
         }
         Err(Error::InvalidBackoffLimit) => {
             warn!(name, namespace, "Invalid backoff limit");
-            ctx.update(
+            ctx.update_scheduled_cronjob(
                 &job,
                 ScheduledCronJobPhase::Failed,
                 "Warning",
                 "Invalid backoff limit",
+            )
+            .await?;
+            Ok(Action::await_change())
+        }
+        Err(e @ Error::DurationTooShort(start, end)) => {
+            warn!(name, namespace, start = ?start, end = ?end, "Duration too short");
+            ctx.update_scheduled_cronjob(
+                &job,
+                ScheduledCronJobPhase::Failed,
+                "Warning",
+                e.to_string().as_str(),
             )
             .await?;
             Ok(Action::await_change())
@@ -192,7 +200,7 @@ async fn reconcile_cronjob_impl(
             match status.phase {
                 ScheduledCronJobPhase::Pending | ScheduledCronJobPhase::Unknown => {
                     info!(name, namespace, "Updating status to Running");
-                    ctx.update(
+                    ctx.update_scheduled_cronjob(
                         job,
                         ScheduledCronJobPhase::Running,
                         "Normal",
@@ -210,7 +218,7 @@ async fn reconcile_cronjob_impl(
         }
         None => {
             info!(name, namespace, "No status found, setting to Running");
-            ctx.update(
+            ctx.update_scheduled_cronjob(
                 job,
                 ScheduledCronJobPhase::Running,
                 "Normal",
@@ -246,15 +254,4 @@ async fn get_cronjob(
             Err(e)
         }
     }
-}
-
-pub fn error_policy_for_scheduled_cronjob(
-    job: Arc<ScheduledCronJob>,
-    err: &Error,
-    _ctx: Arc<Context>,
-) -> Action {
-    let name = job.name_any();
-    let namespace = job.namespace().unwrap_or_default();
-    error!(name, namespace, error = ?err, "Error in reconciliation, will retry in 5 seconds");
-    Action::requeue(Duration::from_secs(5))
 }

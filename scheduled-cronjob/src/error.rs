@@ -1,3 +1,5 @@
+use chrono::{DateTime, Local};
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("not found")]
@@ -11,6 +13,9 @@ pub enum Error {
 
     #[error("end time is before start time")]
     EndBeforeStart,
+
+    #[error("duration between {0} and {1} must be at least 5 minutes")]
+    DurationTooShort(DateTime<Local>, DateTime<Local>),
 
     #[error("wait for {0}")]
     WaitFor(chrono::Duration),
