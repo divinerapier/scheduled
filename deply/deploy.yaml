@@ -1,0 +1,179 @@
+---
+# Namespace for the controller
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scheduled-cronjob-system
+
+---
+# ServiceAccount for the controller pod
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scheduled-cronjob-controller-sa
+  namespace: scheduled-cronjob-system
+
+---
+# ClusterRole defining permissions needed by the controller
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: scheduled-cronjob-controller-role
+rules:
+  # Permissions for ScheduledCronJob CRD
+  - apiGroups:
+      - batch.divinerapier.io
+    resources:
+      - scheduledcronjobs
+    verbs:
+      - get
+      - list
+      - watch
+      - update
+      - patch
+  - apiGroups:
+      - batch.divinerapier.io
+    resources:
+      - scheduledcronjobs/status
+    verbs:
+      - get
+      - update
+      - patch
+  - apiGroups:
+      - batch.divinerapier.io
+    resources:
+      - scheduledcronjobs/finalizers
+    verbs:
+      - update
+  # Permissions for DelayedJob CRD
+  - apiGroups:
+      - batch.divinerapier.io
+    resources:
+      - delayedjobs
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups: ["batch.divinerapier.io"]
+    resources:
+      - delayedjobs/status
+    verbs:
+      - get
+      - update
+      - patch
+  - apiGroups:
+      - batch.divinerapier.io
+    resources:
+      - delayedjobs/finalizers
+    verbs:
+      - update
+  # Permissions for managing CronJobs (owned by ScheduledCronJob)
+  - apiGroups:
+      - batch
+    resources:
+      - cronjobs
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Permissions for managing Jobs (owned by DelayedJob)
+  - apiGroups:
+      - batch
+    resources:
+      - jobs
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - batch
+    resources:
+      - jobs/status
+    verbs:
+      - get
+  # Permissions to create events
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+
+---
+# ClusterRoleBinding to grant the role to the ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scheduled-cronjob-controller-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: scheduled-cronjob-controller-role
+subjects:
+  - kind: ServiceAccount
+    name: scheduled-cronjob-controller-sa
+    namespace: scheduled-cronjob-system # Must match the ServiceAccount's namespace
+
+---
+# Deployment for the controller
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduled-cronjob-controller
+  namespace: scheduled-cronjob-system
+  labels:
+    app: scheduled-cronjob-controller
+spec:
+  replicas: 1 # Start with one replica
+  selector:
+    matchLabels:
+      app: scheduled-cronjob-controller
+  template:
+    metadata:
+      labels:
+        app: scheduled-cronjob-controller
+    spec:
+      serviceAccountName: scheduled-cronjob-controller-sa # Use the created ServiceAccount
+      containers:
+        - name: controller
+          # IMPORTANT: Replace this with the actual image path for your controller
+          image: ghcr.io/your-org/scheduled-cronjob-controller:latest
+          imagePullPolicy: IfNotPresent # Or Always if using :latest tag frequently
+          ports:
+            # Add any ports your controller might expose (e.g., for metrics)
+            # - containerPort: 8080
+            #   name: http
+          # Optional: Add resource requests and limits
+          # resources:
+          #   requests:
+          #     cpu: 100m
+          #     memory: 64Mi
+          #   limits:
+          #     cpu: 500m
+          #     memory: 256Mi
+          # Optional: Add readiness/liveness probes if your controller exposes health endpoints
+          # readinessProbe:
+          #   httpGet:
+          #     path: /healthz
+          #     port: http
+          #   initialDelaySeconds: 5
+          #   periodSeconds: 10
+          # livenessProbe:
+          #   httpGet:
+          #     path: /healthz
+          #     port: http
+          #   initialDelaySeconds: 15
+          #   periodSeconds: 20

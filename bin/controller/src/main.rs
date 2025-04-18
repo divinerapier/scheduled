@@ -3,7 +3,7 @@ use std::sync::Arc;
 use futures::StreamExt as _;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
 use kube::{Api, Client, runtime::controller::Controller};
-use scheduled_cronjob::{
+use scheduled::{
     Context,
     crd::{DelayedJob, ScheduledCronJob},
     reconciler::{reconcile_delayed_job, reconcile_scheduled_cronjob},
@@ -45,7 +45,7 @@ async fn run_scheduled_cronjob_controller(
         .owns(cronjobs, Default::default())
         .run(
             reconcile_scheduled_cronjob,
-            scheduled_cronjob::error_policy,
+            scheduled::error_policy,
             ctx.clone(),
         )
         .for_each(|_| futures::future::ready(()))
@@ -60,11 +60,7 @@ async fn run_delayed_job_controller(
     Controller::new(delayed_jobs.clone(), Default::default())
         .shutdown_on_signal()
         .owns(jobs, Default::default())
-        .run(
-            reconcile_delayed_job,
-            scheduled_cronjob::error_policy,
-            ctx.clone(),
-        )
+        .run(reconcile_delayed_job, scheduled::error_policy, ctx.clone())
         .for_each(|_| futures::future::ready(()))
         .await;
 }

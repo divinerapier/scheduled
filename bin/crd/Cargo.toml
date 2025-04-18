@@ -6,4 +6,4 @@ edition = "2024"
 [dependencies]
 kube = { workspace = true }
 serde_yaml = { workspace = true }
-scheduled-cronjob = { workspace = true }
+scheduled = { workspace = true }

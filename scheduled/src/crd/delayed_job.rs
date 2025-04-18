@@ -1,9 +1,11 @@
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
-use kube::Resource as _;
+use kube::{CELSchema, Resource as _};
 use kube::{CustomResource, ResourceExt, api::ObjectMeta};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use super::IntoTime;
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, JsonSchema, PartialEq, Eq)]
 pub enum DelayedJobPhase {
@@ -35,14 +37,14 @@ impl DelayedJobPhase {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, CELSchema)]
 pub struct DelayedJobStatus {
     pub phase: DelayedJobPhase,
     pub message: Option<String>,
     pub last_update_time: Option<Time>,
 }
 
-#[derive(Debug, Serialize, Deserialize, CustomResource, Default, Clone, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, CustomResource, Default, Clone, CELSchema)]
 #[kube(
     group = "batch.divinerapier.io",
     version = "v1alpha1",
@@ -53,6 +55,12 @@ pub struct DelayedJobStatus {
     status = "DelayedJobStatus",
     shortname = "dj"
 )]
+// #[cel_validate(rule = Rule::new("has(self.spec.concurrencyPolicy) && (self.spec.concurrencyPolicy in ['Allow', 'Forbid', 'Replace'])").message("Invalid concurrency policy").reason(Reason::FieldValueInvalid))]
+// #[cel_validate(rule = Rule::new("has(self.spec.failedJobsHistoryLimit) && self.spec.failedJobsHistoryLimit >= 0").message("Invalid failed jobs history limit").reason(Reason::FieldValueInvalid))]
+// #[cel_validate(rule = Rule::new("has(self.spec.successfulJobsHistoryLimit) && self.spec.successfulJobsHistoryLimit >= 0").message("Invalid successful jobs history limit").reason(Reason::FieldValueInvalid))]
+#[cel_validate(rule = Rule::new("has(self.spec.backoffLimit) && self.spec.backoffLimit >= 0").message("Invalid backoff limit").reason(Reason::FieldValueInvalid))]
+#[cel_validate(rule = Rule::new("has(self.spec.template.spec.containers) && self.spec.template.spec.containers.size() > 0").message("Invalid containers").reason(Reason::FieldValueRequired))]
+#[cel_validate(rule = Rule::new("has(self.spec.template.spec.restartPolicy) && self.spec.template.spec.restartPolicy in ['Always', 'OnFailure', 'Never']").message("Invalid restart policy").reason(Reason::FieldValueInvalid))]
 #[serde(rename_all = "camelCase")]
 pub struct DelayedJobSpec {
     /// Specifies the time to start the job.
@@ -60,6 +68,18 @@ pub struct DelayedJobSpec {
 
     /// Specifies the job that will be created when executing a DelayedJob.
     pub spec: JobSpec,
+}
+
+impl DelayedJobSpec {
+    pub fn new<T>(start_time: T, spec: JobSpec) -> Result<Self, chrono::ParseError>
+    where
+        T: IntoTime,
+    {
+        Ok(Self {
+            start_time: start_time.into_time()?,
+            spec,
+        })
+    }
 }
 
 impl DelayedJob {

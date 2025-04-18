@@ -1,9 +1,9 @@
 [workspace]
-members = ["bin/*", "example/example-basic", "scheduled-cronjob"]
+members = ["bin/*", "example/*", "scheduled"]
 resolver = "3"
 
 [workspace.dependencies]
-scheduled-cronjob = { path = "scheduled-cronjob" }
+scheduled = { path = "scheduled" }
 chrono = "0.4.40"
 cronjob = "0.4.17"
 futures = "0.3.31"

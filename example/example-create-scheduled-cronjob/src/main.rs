@@ -6,7 +6,7 @@ use kube::{
     Api, ResourceExt as _,
     api::{DeleteParams, ObjectMeta},
 };
-use scheduled_cronjob::{ScheduledCronJob, ScheduledCronJobSpec};
+use scheduled::{ScheduledCronJob, ScheduledCronJobSpec};
 
 #[tokio::main]
 async fn main() {

@@ -4,7 +4,8 @@ pub mod rbac;
 pub mod reconciler;
 
 pub use crd::{
-    CronJobBuilder, DelayedJob, ScheduledCronJob, ScheduledCronJobSpec, ScheduledCronJobStatus,
+    CronJobBuilder, DelayedJob, DelayedJobSpec, ScheduledCronJob, ScheduledCronJobSpec,
+    ScheduledCronJobStatus,
 };
 pub use error::Error;
 pub use rbac::{RbacRule, get_rbac_rules};

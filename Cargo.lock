@@ -223,7 +223,7 @@ dependencies = [
  "futures",
  "k8s-openapi",
  "kube",
- "scheduled-cronjob",
+ "scheduled",
  "schemars",
  "serde",
  "serde_json",
@@ -273,7 +273,7 @@ name = "crd"
 version = "0.1.0"
 dependencies = [
  "kube",
- "scheduled-cronjob",
+ "scheduled",
  "serde_yaml",
 ]
 
@@ -410,14 +410,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "example-basic"
+name = "example-create-delayed-job"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "futures",
  "k8s-openapi",
  "kube",
- "scheduled-cronjob",
+ "scheduled",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.12",
+ "tokio",
+]
+
+[[package]]
+name = "example-create-scheduled-cronjob"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "futures",
+ "k8s-openapi",
+ "kube",
+ "scheduled",
  "schemars",
  "serde",
  "serde_json",
@@ -1259,7 +1275,7 @@ dependencies = [
  "futures",
  "k8s-openapi",
  "kube",
- "scheduled-cronjob",
+ "scheduled",
  "schemars",
  "serde",
  "serde_json",
@@ -1431,7 +1447,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "scheduled-cronjob"
+name = "scheduled"
 version = "0.1.0"
 dependencies = [
  "chrono",
