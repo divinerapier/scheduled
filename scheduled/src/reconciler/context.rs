@@ -1,12 +1,10 @@
 use std::ops::Deref;
 
-use crate::ScheduledCronJobStatus;
-use crate::crd::{
-    DelayedJob, DelayedJobPhase, DelayedJobStatus, ScheduledCronJob, ScheduledCronJobPhase,
-};
+use crate::CronJobStatus;
+use crate::crd::{CronJob, CronJobPhase, DelayedJob, DelayedJobPhase, DelayedJobStatus};
 use chrono::Utc;
 use k8s_openapi::NamespaceResourceScope;
-use k8s_openapi::api::batch::v1::CronJob;
+use k8s_openapi::api::batch::v1::CronJob as K8sCronJob;
 use k8s_openapi::api::core::v1::{Event, EventSeries};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{MicroTime, ObjectMeta, Time};
 use kube::ResourceExt;
@@ -37,8 +35,9 @@ impl Context {
         let api = Api::<K>::namespaced(self.client.clone(), namespace);
         match api.get(name).await {
             Ok(object) => Ok(object),
-            Err(KubeError::Api(e)) if e.code == 404 => Err(crate::Error::NotFound),
-            Err(e) => Err(crate::Error::Kube(e)),
+            Err(e) => Err(e.into()),
+            // Err(KubeError::Api(e)) if e.code == 404 => Err(crate::Error::NotFound),
+            // Err(e) => Err(crate::Error::Kube(e)),
         }
     }
 
@@ -52,7 +51,7 @@ impl Context {
         let api = Api::<K>::namespaced(self.client.clone(), namespace);
         match api.create(&PostParams::default(), object).await {
             Ok(object) => Ok(object),
-            Err(e) => Err(crate::Error::Kube(e)),
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -76,15 +75,15 @@ impl Context {
     pub async fn create_cronjob(
         &self,
         namespace: &str,
-        object: &CronJob,
-    ) -> Result<CronJob, crate::Error> {
+        object: &K8sCronJob,
+    ) -> Result<K8sCronJob, crate::Error> {
         self.create(namespace, object).await
     }
 
     pub async fn update_scheduled_cronjob(
         &self,
-        resource: &ScheduledCronJob,
-        status: ScheduledCronJobPhase,
+        resource: &CronJob,
+        status: CronJobPhase,
         event_type: &str,
         message: &str,
     ) -> Result<(), crate::Error> {
@@ -104,20 +103,20 @@ impl Context {
 
     pub async fn update_scheduled_cronjob_status(
         &self,
-        resource: &ScheduledCronJob,
-        phase: ScheduledCronJobPhase,
+        resource: &CronJob,
+        phase: CronJobPhase,
         message: &str,
     ) -> Result<(), crate::Error> {
         let namespace = resource.namespace().unwrap_or_default();
         let name = resource.name_any();
-        let api = Api::<ScheduledCronJob>::namespaced(self.client.clone(), &namespace);
+        let api = Api::<CronJob>::namespaced(self.client.clone(), &namespace);
 
         let mut resource = match api.get(&name).await {
             Ok(resource) => resource,
             Err(KubeError::Api(e)) if e.code == 404 => return Ok(()),
             Err(e) => return Err(crate::Error::Kube(e)),
         };
-        resource.status = Some(ScheduledCronJobStatus {
+        resource.status = Some(CronJobStatus {
             phase,
             message: Some(message.to_string()),
             last_update_time: Some(Time(Utc::now())),
@@ -137,7 +136,7 @@ impl Context {
 
     pub async fn create_scheduled_cronjob_event(
         &self,
-        resource: &ScheduledCronJob,
+        resource: &CronJob,
         event_type: &str,
         reason: &str,
         message: &str,
@@ -147,7 +146,7 @@ impl Context {
         let api = Api::<Event>::namespaced(self.client.clone(), &namespace);
         let now = Utc::now();
 
-        let api_version = ScheduledCronJob::api_version(&());
+        let api_version = CronJob::api_version(&());
 
         assert_eq!(api_version, "batch.divinerapier.io/v1alpha1");
 
@@ -173,7 +172,7 @@ impl Context {
             message: Some(message.to_string()),
             reason: Some(reason.to_string()),
             reporting_component: Some("scheduled-cronjob".to_string()),
-            reporting_instance: Some("scheduled-cronjob-controller".to_string()),
+            reporting_instance: Some("scheduled-controller".to_string()),
             type_: Some(event_type.to_string()),
             series: Some(EventSeries {
                 count: Some(1),
@@ -208,10 +207,16 @@ impl Context {
             message = message,
             "Updating status for scheduled cronjob",
         );
-        self.create_delayed_job_event(resource, event_type, status.as_str(), message)
-            .await?;
-        self.update_delayed_job_status(resource, status, message)
-            .await?;
+        let e = self
+            .create_delayed_job_event(resource, event_type, status.as_str(), message)
+            .await;
+        println!("create_delayed_job_event: {:?}", e);
+        e?;
+        let e = self
+            .update_delayed_job_status(resource, status, message)
+            .await;
+        println!("update_delayed_job_status: {:?}", e);
+        e?;
         Ok(())
     }
 
@@ -243,8 +248,11 @@ impl Context {
         );
 
         let bytes = serde_json::to_vec(&resource)?;
-        api.replace_status(&name, &PostParams::default(), bytes)
-            .await?;
+        let e = api
+            .replace_status(&name, &PostParams::default(), bytes)
+            .await;
+        println!("replace_status: {:?}", e);
+        e?;
         Ok(())
     }
 
@@ -285,8 +293,8 @@ impl Context {
             last_timestamp: Some(Time(now)),
             message: Some(message.to_string()),
             reason: Some(reason.to_string()),
-            reporting_component: Some("scheduled-cronjob".to_string()),
-            reporting_instance: Some("scheduled-cronjob-controller".to_string()),
+            reporting_component: Some("delayed-job".to_string()),
+            reporting_instance: Some("scheduled-controller".to_string()),
             type_: Some(event_type.to_string()),
             series: Some(EventSeries {
                 count: Some(1),
@@ -294,7 +302,7 @@ impl Context {
                 ..Default::default()
             }),
             source: Some(k8s_openapi::api::core::v1::EventSource {
-                component: Some("scheduled-cronjob".to_string()),
+                component: Some("delayed-job".to_string()),
                 ..Default::default()
             }),
             related: None,

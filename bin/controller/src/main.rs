@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use futures::StreamExt as _;
-use k8s_openapi::api::batch::v1::{CronJob, Job};
+use k8s_openapi::api::batch::v1::{CronJob as K8sCronJob, Job};
 use kube::{Api, Client, runtime::controller::Controller};
 use scheduled::{
     Context,
-    crd::{DelayedJob, ScheduledCronJob},
+    crd::{CronJob, DelayedJob},
     reconciler::{reconcile_delayed_job, reconcile_scheduled_cronjob},
 };
 use tracing_subscriber::filter::LevelFilter;
@@ -20,9 +20,9 @@ async fn main() -> Result<(), kube::Error> {
     let client = Client::try_default().await?;
 
     // 创建 API 客户端
-    let scheduled_cronjobs = Api::<ScheduledCronJob>::all(client.clone());
+    let scheduled_cronjobs = Api::<CronJob>::all(client.clone());
     let delayed_jobs = Api::<DelayedJob>::all(client.clone());
-    let cronjobs = Api::<CronJob>::all(client.clone());
+    let cronjobs = Api::<K8sCronJob>::all(client.clone());
     let jobs = Api::<k8s_openapi::api::batch::v1::Job>::all(client.clone());
 
     let ctx = Arc::new(Context::new(client));
@@ -36,8 +36,8 @@ async fn main() -> Result<(), kube::Error> {
 }
 
 async fn run_scheduled_cronjob_controller(
-    scheduled_cronjobs: Api<ScheduledCronJob>,
-    cronjobs: Api<CronJob>,
+    scheduled_cronjobs: Api<CronJob>,
+    cronjobs: Api<K8sCronJob>,
     ctx: Arc<Context>,
 ) {
     Controller::new(scheduled_cronjobs.clone(), Default::default())

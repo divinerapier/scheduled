@@ -1,0 +1,5 @@
+## Append samples of your project ##
+resources:
+- scheduled_v1alpha1_delayedjob.yaml
+- scheduled_v1alpha1_cronjob.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

@@ -10,8 +10,9 @@ WORKDIR /app
 # 复制 Cargo 文件
 COPY Cargo.toml Cargo.lock ./
 COPY bin/controller/Cargo.toml /app/bin/controller/
-COPY scheduled-cronjob/Cargo.toml /app/scheduled-cronjob/
-COPY example/example-basic/Cargo.toml /app/example/example-basic/
+COPY scheduled/Cargo.toml /app/scheduled/
+COPY example/example-create-delayed-job/Cargo.toml /app/example/example-create-delayed-job/
+COPY example/example-create-scheduled-cronjob/Cargo.toml /app/example/example-create-scheduled-cronjob/
 
 RUN cargo chef prepare --recipe-path recipe.json
 
@@ -54,4 +55,4 @@ COPY --from=builder /app/target/release/controller /usr/local/bin/controller
 EXPOSE 3000
 
 # 启动命令
-CMD ["controller"]
+CMD ["/usr/local/bin/controller"]

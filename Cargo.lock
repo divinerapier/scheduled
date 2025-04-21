@@ -410,7 +410,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "example-create-delayed-job"
+name = "example-create-cron-job"
 version = "0.1.0"
 dependencies = [
  "chrono",
@@ -426,7 +426,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "example-create-scheduled-cronjob"
+name = "example-create-delayed-job"
 version = "0.1.0"
 dependencies = [
  "chrono",

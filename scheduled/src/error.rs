@@ -5,6 +5,9 @@ pub enum Error {
     #[error("not found")]
     NotFound,
 
+    #[error("unretriable k8s error: {0}")]
+    UnretriableK8SError(kube::Error),
+
     #[error("invalid start time")]
     InvalidStartTime,
 
@@ -24,7 +27,7 @@ pub enum Error {
     Expired(chrono::DateTime<chrono::Local>),
 
     #[error("k8s error: {0}")]
-    Kube(#[from] kube::Error),
+    Kube(kube::Error),
 
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
@@ -40,4 +43,18 @@ pub enum Error {
 
     #[error("invalid backoff limit")]
     InvalidBackoffLimit,
+}
+
+impl From<kube::Error> for Error {
+    fn from(error: kube::Error) -> Self {
+        // tracing::error!("kube error: {:?}", error);
+        match error {
+            kube::Error::Api(ref e) if e.code == 404 => Error::NotFound,
+            kube::Error::Api(ref e) if e.code == 422 => {
+                tracing::error!("kube error: {:?}", e);
+                Error::UnretriableK8SError(error)
+            }
+            _ => Error::Kube(error),
+        }
+    }
 }

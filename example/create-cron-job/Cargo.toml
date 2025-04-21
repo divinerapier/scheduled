@@ -1,0 +1,20 @@
+[package]
+name = "example-create-cron-job"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = { workspace = true }
+futures = { workspace = true }
+k8s-openapi = { workspace = true }
+kube = { workspace = true }
+scheduled = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[[bin]]
+name = "example-create-cron-job"
+path = "src/main.rs"
