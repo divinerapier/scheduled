@@ -5,7 +5,12 @@ edition = "2024"
 
 [dependencies]
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
+derive_builder = { workspace = true }
+dashmap = { workspace = true }
+either = { workspace = true }
 futures = { workspace = true }
+itertools = { workspace = true }
 k8s-openapi = { workspace = true }
 kube = { workspace = true }
 schemars = { workspace = true }
@@ -14,6 +19,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+cron = "0.15.0"
 
 [lib]
 name = "scheduled"

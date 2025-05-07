@@ -5,6 +5,9 @@ pub enum Error {
     #[error("not found")]
     NotFound,
 
+    #[error("already exists for cronjob {0} in namespace {1} at {2}")]
+    AlreadyExists(String, String, DateTime<Local>),
+
     #[error("unretriable k8s error: {0}")]
     UnretriableK8SError(kube::Error),
 

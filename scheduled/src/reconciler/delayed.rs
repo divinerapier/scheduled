@@ -29,6 +29,10 @@ pub async fn reconcile(job: Arc<DelayedJob>, ctx: Arc<Context>) -> Result<Action
             );
             Ok(action)
         }
+        Err(Error::AlreadyExists(name, namespace, time)) => {
+            warn!(name, namespace, time = ?time, "Job already exists");
+            Ok(Action::await_change())
+        }
         Err(Error::NotFound) => {
             unreachable!()
         }

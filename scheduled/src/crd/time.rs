@@ -59,3 +59,13 @@ impl IntoTime for Option<Time> {
         }
     }
 }
+
+impl IntoTime for i64 {
+    fn into_time(self) -> Result<Option<Time>, chrono::ParseError> {
+        Ok(Some(Time(
+            DateTime::from_timestamp_millis(self)
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        )))
+    }
+}

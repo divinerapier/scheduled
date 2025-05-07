@@ -3,28 +3,28 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: scheduled-job-system
+  name: scheduled-system
 
 ---
 # ServiceAccount for the controller pod
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: scheduled-job-controller-sa
-  namespace: scheduled-job-system
+  name: scheduled-controller-sa
+  namespace: scheduled-system
 
 ---
 # ClusterRole defining permissions needed by the controller
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: scheduled-job-controller-role
+  name: scheduled-controller-role
 rules:
   # Permissions for ScheduledCronJob CRD
   - apiGroups:
-      - batch.divinerapier.io
+      - scheduled.divinerapier.io
     resources:
-      - scheduledcronjobs
+      - cronjobs
     verbs:
       - get
       - list
@@ -32,22 +32,22 @@ rules:
       - update
       - patch
   - apiGroups:
-      - batch.divinerapier.io
+      - scheduled.divinerapier.io
     resources:
-      - scheduledjobs/status
+      - cronjobs/status
     verbs:
       - get
       - update
       - patch
   - apiGroups:
-      - batch.divinerapier.io
+      - scheduled.divinerapier.io
     resources:
-      - scheduledjobs/finalizers
+      - cronjobs/finalizers
     verbs:
       - update
   # Permissions for DelayedJob CRD
   - apiGroups:
-      - batch.divinerapier.io
+      - scheduled.divinerapier.io
     resources:
       - delayedjobs
     verbs:
@@ -59,7 +59,7 @@ rules:
       - patch
       - delete
   - apiGroups:
-      - batch.divinerapier.io
+      - scheduled.divinerapier.io
     resources:
       - delayedjobs/status
     verbs:
@@ -67,7 +67,7 @@ rules:
       - update
       - patch
   - apiGroups:
-      - batch.divinerapier.io
+      - scheduled.divinerapier.io
     resources:
       - delayedjobs/finalizers
     verbs:
@@ -118,40 +118,40 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: scheduled-job-controller-binding
+  name: scheduled-controller-binding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: scheduled-job-controller-role
+  name: scheduled-controller-role
 subjects:
   - kind: ServiceAccount
-    name: scheduled-job-controller-sa
-    namespace: scheduled-job-system # Must match the ServiceAccount's namespace
+    name: scheduled-controller-sa
+    namespace: scheduled-system # Must match the ServiceAccount's namespace
 
 ---
 # Deployment for the controller
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: scheduled-job-controller
-  namespace: scheduled-job-system
+  name: scheduled-controller
+  namespace: scheduled-system
   labels:
-    app: scheduled-job-controller
+    app: scheduled-controller
 spec:
   replicas: 1 # Start with one replica
   selector:
     matchLabels:
-      app: scheduled-job-controller
+      app: scheduled-controller
   template:
     metadata:
       labels:
-        app: scheduled-job-controller
+        app: scheduled-controller
     spec:
-      serviceAccountName: scheduled-job-controller-sa # Use the created ServiceAccount
+      serviceAccountName: scheduled-controller-sa # Use the created ServiceAccount
       containers:
         - name: controller
           # IMPORTANT: Replace this with the actual image path for your controller
-          image: divinerapier/scheduled-job-controller:v0.0.6
+          image: divinerapier/scheduled-controller:v0.0.8
           imagePullPolicy: IfNotPresent # Or Always if using :latest tag frequently
           ports:
             # Add any ports your controller might expose (e.g., for metrics)
