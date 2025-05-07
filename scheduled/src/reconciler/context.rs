@@ -1,14 +1,14 @@
 use std::ops::Deref;
+use std::sync::Arc;
 
-use crate::CronJobStatus;
-use crate::crd::{CronJob, CronJobPhase, DelayedJob, DelayedJobPhase, DelayedJobStatus};
+use crate::crd::{CronJob, DelayedJob, DelayedJobPhase, DelayedJobStatus};
 use chrono::Utc;
 use k8s_openapi::NamespaceResourceScope;
 use k8s_openapi::api::batch::v1::CronJob as K8sCronJob;
 use k8s_openapi::api::core::v1::{Event, EventSeries};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{MicroTime, ObjectMeta, Time};
 use kube::ResourceExt;
-use kube::api::{DeleteParams, PostParams};
+use kube::api::{DeleteParams, ListParams, PostParams};
 use kube::core::Resource as KubeResource;
 use kube::core::object::HasStatus;
 use kube::{Api, Client, Error as KubeError};
@@ -18,11 +18,15 @@ use serde_json;
 
 pub struct Context {
     client: Client,
+    _namespaces: Arc<dashmap::DashSet<String>>,
 }
 
 impl Context {
     pub fn new(client: Client) -> Self {
-        Self { client }
+        Self {
+            client,
+            _namespaces: Arc::new(dashmap::DashSet::new()),
+        }
     }
 
     pub async fn get<K>(&self, namespace: &str, name: &str) -> Result<K, crate::Error>
@@ -36,8 +40,20 @@ impl Context {
         match api.get(name).await {
             Ok(object) => Ok(object),
             Err(e) => Err(e.into()),
-            // Err(KubeError::Api(e)) if e.code == 404 => Err(crate::Error::NotFound),
-            // Err(e) => Err(crate::Error::Kube(e)),
+        }
+    }
+
+    pub async fn list<K>(&self, namespace: &str) -> Result<Vec<K>, crate::Error>
+    where
+        K: KubeResource<Scope = NamespaceResourceScope>,
+        K: KubeResource,
+        K: Clone + DeserializeOwned + std::fmt::Debug,
+        K::DynamicType: Default,
+    {
+        let api = Api::<K>::namespaced(self.client.clone(), namespace);
+        match api.list(&ListParams::default()).await {
+            Ok(object) => Ok(object.items),
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -72,6 +88,27 @@ impl Context {
         Ok(())
     }
 
+    pub async fn delete_background<K>(
+        &self,
+        namespace: &str,
+        name: &str,
+    ) -> Result<(), crate::Error>
+    where
+        K: KubeResource<Scope = NamespaceResourceScope>,
+        K: KubeResource,
+        K: Clone + DeserializeOwned + Serialize + std::fmt::Debug,
+        K::DynamicType: Default,
+    {
+        let api = Api::<K>::namespaced(self.client.clone(), namespace);
+        if let Err(e) = api.delete(name, &DeleteParams::background()).await {
+            match e {
+                KubeError::Api(e) if e.code == 404 => return Ok(()),
+                _ => return Err(crate::Error::Kube(e)),
+            }
+        }
+        Ok(())
+    }
+
     pub async fn create_cronjob(
         &self,
         namespace: &str,
@@ -80,59 +117,75 @@ impl Context {
         self.create(namespace, object).await
     }
 
-    pub async fn update_scheduled_cronjob(
-        &self,
-        resource: &CronJob,
-        status: CronJobPhase,
-        event_type: &str,
-        message: &str,
-    ) -> Result<(), crate::Error> {
-        tracing::info!(
-            name = resource.name_any(),
-            namespace = resource.namespace().unwrap_or_default(),
-            status = status.as_str(),
-            message = message,
-            "Updating status for scheduled cronjob",
-        );
-        self.create_scheduled_cronjob_event(resource, event_type, status.as_str(), message)
-            .await?;
-        self.update_scheduled_cronjob_status(resource, status, message)
-            .await?;
-        Ok(())
-    }
+    // pub async fn update_scheduled_cronjob(
+    //     &self,
+    //     resource: &CronJob,
+    //     status: CronJobPhase,
+    //     event_type: &str,
+    //     message: &str,
+    // ) -> Result<(), crate::Error> {
+    //     tracing::info!(
+    //         name = resource.name_any(),
+    //         namespace = resource.namespace().unwrap_or_default(),
+    //         status = status.as_str(),
+    //         message = message,
+    //         "Updating status for scheduled cronjob",
+    //     );
+    //     self.create_scheduled_cronjob_event(resource, event_type, status.as_str(), message)
+    //         .await?;
+    //     self.update_scheduled_cronjob_status(resource, status, message)
+    //         .await?;
+    //     Ok(())
+    // }
 
-    pub async fn update_scheduled_cronjob_status(
-        &self,
-        resource: &CronJob,
-        phase: CronJobPhase,
-        message: &str,
-    ) -> Result<(), crate::Error> {
-        let namespace = resource.namespace().unwrap_or_default();
-        let name = resource.name_any();
+    pub async fn update_status<K>(&self, resource: &K) -> Result<(), crate::Error>
+    where
+        K: KubeResource<Scope = NamespaceResourceScope>,
+        K: KubeResource,
+        K: Clone + DeserializeOwned + Serialize + std::fmt::Debug,
+        K::DynamicType: Default,
+    {
+        let namespace = resource.meta().namespace.as_deref().unwrap();
+        let name = resource.meta().name.as_deref().unwrap_or_default();
         let api = Api::<CronJob>::namespaced(self.client.clone(), &namespace);
-
-        let mut resource = match api.get(&name).await {
-            Ok(resource) => resource,
-            Err(KubeError::Api(e)) if e.code == 404 => return Ok(()),
-            Err(e) => return Err(crate::Error::Kube(e)),
-        };
-        resource.status = Some(CronJobStatus {
-            phase,
-            message: Some(message.to_string()),
-            last_update_time: Some(Time(Utc::now())),
-        });
-
-        assert_eq!(resource.status().unwrap().phase, phase);
-        assert_eq!(
-            resource.status().unwrap().message,
-            Some(message.to_string())
-        );
-
-        let bytes = serde_json::to_vec(&resource)?;
-        api.replace_status(&name, &PostParams::default(), bytes)
+        let data = serde_json::to_vec(resource)?;
+        api.replace_status(name, &PostParams::default(), data)
             .await?;
         Ok(())
     }
+
+    // pub async fn update_scheduled_cronjob_status(
+    //     &self,
+    //     resource: &CronJob,
+    //     phase: CronJobPhase,
+    //     message: &str,
+    // ) -> Result<(), crate::Error> {
+    //     let namespace = resource.namespace().unwrap_or_default();
+    //     let name = resource.name_any();
+    //     let api = Api::<CronJob>::namespaced(self.client.clone(), &namespace);
+
+    //     let mut resource = match api.get(&name).await {
+    //         Ok(resource) => resource,
+    //         Err(KubeError::Api(e)) if e.code == 404 => return Ok(()),
+    //         Err(e) => return Err(crate::Error::Kube(e)),
+    //     };
+
+    //     let status = resource
+    //         .status
+    //         .get_or_insert_default()
+    //         .update_last_schedule_time(Utc::now());
+
+    //     status.phase = phase;
+    //     status.message = message.to_string();
+
+    //     assert_eq!(resource.status().unwrap().phase, phase);
+    //     assert_eq!(resource.status().unwrap().message, message.to_string());
+
+    //     let bytes = serde_json::to_vec(&resource)?;
+    //     api.replace_status(&name, &PostParams::default(), bytes)
+    //         .await?;
+    //     Ok(())
+    // }
 
     pub async fn create_scheduled_cronjob_event(
         &self,
@@ -148,7 +201,7 @@ impl Context {
 
         let api_version = CronJob::api_version(&());
 
-        assert_eq!(api_version, "batch.divinerapier.io/v1alpha1");
+        assert_eq!(api_version, "scheduled.divinerapier.io/v1alpha1");
 
         let event = Event {
             metadata: ObjectMeta {

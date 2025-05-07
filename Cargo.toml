@@ -3,12 +3,17 @@ members = ["bin/*", "example/*", "scheduled"]
 resolver = "3"
 
 [workspace.dependencies]
-scheduled = { path = "scheduled" }
+derive_builder = "0.20.2"
 chrono = "0.4.40"
+chrono-tz = "0.10.3"
 cronjob = "0.4.17"
+dashmap = "6.1.0"
+either = "1.15.0"
 futures = "0.3.31"
+itertools = "0.14"
 k8s-openapi = { version = "0.24.0", features = ["schemars", "v1_30"] }
 kube = { version = "0.99.0", features = ["derive", "runtime"] }
+scheduled = { path = "scheduled" }
 schemars = "0.8.22"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"

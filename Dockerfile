@@ -11,8 +11,8 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY bin/controller/Cargo.toml /app/bin/controller/
 COPY scheduled/Cargo.toml /app/scheduled/
-COPY example/example-create-delayed-job/Cargo.toml /app/example/example-create-delayed-job/
-COPY example/example-create-scheduled-cronjob/Cargo.toml /app/example/example-create-scheduled-cronjob/
+COPY example/create-delayed-job/Cargo.toml /app/example/create-delayed-job/
+COPY example/create-cron-job/Cargo.toml /app/example/create-cron-job/
 
 RUN cargo chef prepare --recipe-path recipe.json
 

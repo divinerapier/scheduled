@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
 use futures::StreamExt as _;
-use k8s_openapi::api::batch::v1::{CronJob as K8sCronJob, Job};
+use k8s_openapi::api::batch::v1::Job;
 use kube::{Api, Client, runtime::controller::Controller};
 use scheduled::{
     Context,
     crd::{CronJob, DelayedJob},
     reconciler::{reconcile_delayed_job, reconcile_scheduled_cronjob},
 };
+use tracing::info;
 use tracing_subscriber::filter::LevelFilter;
 
 #[tokio::main]
@@ -22,27 +23,47 @@ async fn main() -> Result<(), kube::Error> {
     // 创建 API 客户端
     let scheduled_cronjobs = Api::<CronJob>::all(client.clone());
     let delayed_jobs = Api::<DelayedJob>::all(client.clone());
-    let cronjobs = Api::<K8sCronJob>::all(client.clone());
-    let jobs = Api::<k8s_openapi::api::batch::v1::Job>::all(client.clone());
+    let jobs = Api::<Job>::all(client.clone());
 
     let ctx = Arc::new(Context::new(client));
 
     tokio::select! {
-        _ = run_scheduled_cronjob_controller(scheduled_cronjobs, cronjobs, ctx.clone()) => {},
+        _ = run_scheduled_cronjob_controller(scheduled_cronjobs, jobs.clone(), ctx.clone()) => {},
         _ = run_delayed_job_controller(delayed_jobs, jobs, ctx.clone()) => {},
     }
+
+    // let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
+
+    // let trigger = tx.clone();
+    // tokio::spawn(async move {
+    //     tracing::info!("press ctrl+c to shut down gracefully");
+    //     tokio::signal::ctrl_c().await.unwrap();
+    //     let _ = trigger.send(());
+    //     tracing::info!("graceful shutdown requested, press ctrl+c again to force shutdown");
+    // });
+
+    // tokio::join!(
+    //     run_scheduled_cronjob_controller(
+    //         scheduled_cronjobs,
+    //         jobs.clone(),
+    //         ctx.clone(),
+    //         tx.subscribe()
+    //     ),
+    //     // run_delayed_job_controller(delayed_jobs, jobs, ctx.clone(), tx.subscribe())
+    // );
 
     Ok(())
 }
 
 async fn run_scheduled_cronjob_controller(
     scheduled_cronjobs: Api<CronJob>,
-    cronjobs: Api<K8sCronJob>,
+    jobs: Api<Job>,
     ctx: Arc<Context>,
 ) {
+    info!("run_scheduled_cronjob_controller");
     Controller::new(scheduled_cronjobs.clone(), Default::default())
         .shutdown_on_signal()
-        .owns(cronjobs, Default::default())
+        .owns(jobs, Default::default())
         .run(
             reconcile_scheduled_cronjob,
             scheduled::error_policy,
@@ -57,6 +78,7 @@ async fn run_delayed_job_controller(
     jobs: Api<Job>,
     ctx: Arc<Context>,
 ) {
+    info!("run_delayed_job_controller");
     Controller::new(delayed_jobs.clone(), Default::default())
         .shutdown_on_signal()
         .owns(jobs, Default::default())
