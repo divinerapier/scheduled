@@ -54,5 +54,9 @@ COPY --from=builder /app/target/release/controller /usr/local/bin/controller
 # 暴露端口
 EXPOSE 3000
 
+# Set timezone to Asia/Shanghai
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
 # 启动命令
 CMD ["/usr/local/bin/controller"]
