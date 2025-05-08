@@ -1,5 +1,4 @@
 use chrono::{DateTime, Datelike, Days, Local, Months};
-use futures::executor;
 use itertools::Itertools;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kube::CELSchema;

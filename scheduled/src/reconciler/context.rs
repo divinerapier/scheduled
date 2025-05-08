@@ -203,6 +203,8 @@ impl Context {
 
         assert_eq!(api_version, "scheduled.divinerapier.io/v1alpha1");
 
+        tracing::debug!(name, namespace, "before create event");
+
         let event = Event {
             metadata: ObjectMeta {
                 name: Some(format!("{}-{}", name, now.timestamp())),
@@ -214,9 +216,9 @@ impl Context {
             event_time: Some(MicroTime(now)),
             first_timestamp: Some(Time(now)),
             involved_object: k8s_openapi::api::core::v1::ObjectReference {
-                kind: Some("ScheduledCronJob".to_string()),
-                namespace: Some(namespace),
-                name: Some(name),
+                kind: Some("CronJob".to_string()),
+                namespace: Some(namespace.clone()),
+                name: Some(name.clone()),
                 api_version: Some(api_version.to_string()),
                 uid: resource.metadata.uid.clone(),
                 ..Default::default()
@@ -238,6 +240,8 @@ impl Context {
             }),
             related: None,
         };
+
+        tracing::debug!(name, namespace, "before create event");
 
         match api.create(&PostParams::default(), &event).await {
             Ok(_) => Ok(()),

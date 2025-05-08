@@ -73,44 +73,55 @@ impl CronJobReconciler {
         mut cronjob: CronJob,
         jobs: &'s [Job],
         update_status: &mut bool,
-    ) -> Result<(CronJob, BTreeSet<&'s str>), Error> {
+    ) -> Result<CronJob, Error> {
         // Remove old finished jobs based on history limits
         self.delete_finished_jobs(&mut cronjob, jobs, update_status)
             .await?;
 
-        // Remove finished jobs from active_jobs
-        let (mut cronjob, children_jobs) = self
-            .remove_finished_jobs_from_actives(cronjob, jobs, update_status)
-            .await?;
+        debug!("after delete_finished_jobs");
+
+        let namespace = cronjob.meta().namespace.as_deref().unwrap_or_default();
+        let name = cronjob.meta().name.as_deref().unwrap_or_default();
+        let mut cronjob = self.get_cronjob(namespace, name).await?;
+
+        // // Remove finished jobs from active_jobs
+        // let (mut cronjob, children_jobs) = self
+        //     .remove_finished_jobs_from_actives(cronjob, jobs, update_status)
+        //     .await?;
+
+        debug!("after remove_finished_jobs_from_actives");
 
         // Record missing active jobs if a job exists but is not in active_jobs
-        self.record_missing_active_jobs(&mut cronjob, &children_jobs, update_status)
+        self.record_missing_active_jobs(&mut cronjob, update_status)
             .await?;
 
-        Ok((cronjob, children_jobs))
+        debug!("after record_missing_active_jobs");
+
+        Ok(cronjob)
     }
 
     async fn record_missing_active_jobs(
         &self,
         cronjob: &mut CronJob,
-        children_jobs: &BTreeSet<&str>,
         update_status: &mut bool,
     ) -> Result<(), Error> {
         if let Some(active_jobs) = cronjob.active_jobs().map(Vec::from) {
-            for job in active_jobs {
-                if children_jobs.contains(job.uid.as_deref().unwrap_or_default()) {
-                    continue;
-                }
-
-                let namespace = job.namespace.as_deref().unwrap_or_default();
-                let name = job.name.as_deref().unwrap_or_default();
+            for job_ref in active_jobs {
+                let namespace = job_ref.namespace.as_deref().unwrap_or_default();
+                let name = job_ref.name.as_deref().unwrap_or_default();
 
                 match self.ctx.get::<Job>(namespace, name).await {
-                    Ok(_) => {}
+                    Ok(job) => {
+                        if conditions::is_job_finished(&job) {
+                            cronjob.delete_from_active_list(
+                                job_ref.uid.as_deref().unwrap_or_default(),
+                            );
+                            *update_status = true;
+                        }
+                    }
                     Err(Error::NotFound) => {
-                        cronjob.delete_from_active_list(job.uid.as_deref().unwrap_or_default());
+                        cronjob.delete_from_active_list(job_ref.uid.as_deref().unwrap_or_default());
                         *update_status = true;
-                        todo!("更新事件");
                     }
                     Err(e) => {
                         error!(name, namespace, error = ?e, "Error getting job");
@@ -130,16 +141,10 @@ impl CronJobReconciler {
         jobs: &[Job],
         update_status: &mut bool,
     ) -> Result<(), Error> {
-        if cronjob.spec.failed_jobs_history_limit.is_none()
-            && cronjob.spec.successful_jobs_history_limit.is_none()
-        {
-            return Ok(());
-        }
-
         let mut failed_jobs = vec![];
         let mut successful_jobs = vec![];
-        let failed_jobs_history_limit = cronjob.spec.failed_jobs_history_limit.unwrap_or(0);
-        let successful_jobs_history_limit = cronjob.spec.successful_jobs_history_limit.unwrap_or(0);
+        let failed_jobs_history_limit = cronjob.spec.failed_jobs_history_limit.unwrap_or(1);
+        let successful_jobs_history_limit = cronjob.spec.successful_jobs_history_limit.unwrap_or(3);
 
         let mut active_jobs_mut = cronjob.active_jobs_mut();
 
@@ -160,11 +165,8 @@ impl CronJobReconciler {
             }
             if let Some(active_jobs_mut) = active_jobs_mut.as_deref_mut() {
                 active_jobs_mut.retain(|j| {
-                    // j.namespace.as_deref().unwrap_or_default()
-                    //     == job.namespace().as_deref().unwrap_or_default()
-                    //     && j.name.as_deref().unwrap_or_default() == job.name_any()
-                    // &&
-                    j.uid.as_deref().unwrap_or_default() == job.uid().as_deref().unwrap_or_default()
+                    j.uid.as_deref().unwrap_or_default()
+                        == job.meta().uid.as_deref().unwrap_or_default()
                 });
                 *update_status = true;
             }
@@ -263,9 +265,7 @@ impl CronJobReconciler {
         });
 
         for job in jobs.iter().take(num_to_delete) {
-            if self.delete_job(cronjob, job).await {
-                update_status = true;
-            }
+            update_status = self.delete_job(cronjob, job).await || update_status;
         }
 
         update_status
@@ -341,17 +341,19 @@ impl CronJobReconciler {
             }
         };
 
-        // info!(name, namespace, "jobs: {:?}", jobs);
-
         let mut update_status = false;
+
+        debug!("before cleanup_finished_jobs");
 
         // Clean up tasks, including three parts:
         // 1. Delete completed jobs
         // 2. Remove completed job UIDs from active_jobs
         // 3. Record timestamp if job is not in active_jobs
-        let (cronjob, _children_jobs) = self
+        let cronjob = self
             .cleanup_finished_jobs(cronjob, &jobs, &mut update_status)
             .await?;
+
+        debug!("after cleanup_finished_jobs");
 
         if cronjob.is_deleted() {
             info!(name, namespace, "Cronjob is deleted");
@@ -501,113 +503,121 @@ impl CronJobReconciler {
         action
     }
 
-    async fn remove_finished_job_from_actives<'s>(
-        &self,
-        children_jobs: &mut BTreeSet<&'s str>,
-        mut cronjob: CronJob,
-        namespace: &str,
-        name: &str,
-        job: &'s Job,
-        update_status: &mut bool,
-    ) -> Result<CronJob, Error> {
-        let uid = job.meta().uid.as_deref().unwrap_or_default();
-        children_jobs.insert(uid);
-        let found = cronjob.contains_active_job(uid);
-        let finished = conditions::is_job_finished(job);
+    // /// 从 active_jobs 列表中删除已经完成的任务
+    // async fn remove_finished_job_from_actives<'s>(
+    //     &self,
+    //     children_jobs: &mut BTreeSet<&'s str>,
+    //     mut cronjob: CronJob,
+    //     namespace: &str,
+    //     name: &str,
+    //     job: &'s Job,
+    //     update_status: &mut bool,
+    // ) -> Result<CronJob, Error> {
+    //     let uid = job.meta().uid.as_deref().unwrap_or_default();
+    //     children_jobs.insert(uid);
+    //     let found = cronjob.contains_active_job(uid);
+    //     let finished = conditions::is_job_finished(job);
 
-        if !found && !finished {
-            let latest_cronjob = self.ctx.get::<CronJob>(&namespace, &name).await?;
-            if latest_cronjob.contains_active_job(uid) {
-                cronjob = latest_cronjob;
-                return Ok(cronjob);
-            }
-            // 否则，记录事件
-            self.ctx
-                .create_scheduled_cronjob_event(
-                    &cronjob,
-                    "Warning",
-                    "UnexpectedJob",
-                    &format!(
-                        "Saw a job that the controller did not create or forgot: {}",
-                        job.name_any()
-                    ),
-                )
-                .await?;
-            return Ok(cronjob);
-        }
+    //     if !found && !finished {
+    //         let latest_cronjob = self.ctx.get::<CronJob>(&namespace, &name).await?;
+    //         if latest_cronjob.contains_active_job(uid) {
+    //             cronjob = latest_cronjob;
+    //             return Ok(cronjob);
+    //         }
+    //         // 否则，记录事件
+    //         self.ctx
+    //             .create_scheduled_cronjob_event(
+    //                 &cronjob,
+    //                 "Warning",
+    //                 "UnexpectedJob",
+    //                 &format!(
+    //                     "Saw a job that the controller did not create or forgot: {}",
+    //                     job.name_any()
+    //                 ),
+    //             )
+    //             .await?;
+    //         return Ok(cronjob);
+    //     }
 
-        // !(!found && !finished) -> (found || finished)
-        if let Some(finished_type) = conditions::get_job_finished_type(job) {
-            if found {
-                cronjob.delete_from_active_list(uid);
-                self.ctx
-                    .create_scheduled_cronjob_event(
-                        &cronjob,
-                        "Normal",
-                        "SawCompletedJob",
-                        &format!(
-                            "Saw completed job: {}, condition: {}",
-                            job.name_any(),
-                            finished_type
-                        ),
-                    )
-                    .await?;
-            }
-            if finished_type == JobFinishedType::Complete {
-                let last_successful_time =
-                    &mut cronjob.status.get_or_insert_default().last_successful_time;
+    //     // !(!found && !finished) -> (found || finished)
+    //     if let Some(finished_type) = conditions::get_job_finished_type(job) {
+    //         if found {
+    //             cronjob.delete_from_active_list(uid);
+    //             tracing::info!(name, namespace, "after delete_from_active_list...");
+    //             tokio::time::sleep(Duration::from_secs(10)).await;
+    //             let x = self
+    //                 .ctx
+    //                 .create_scheduled_cronjob_event(
+    //                     &cronjob,
+    //                     "Normal",
+    //                     "SawCompletedJob",
+    //                     &format!(
+    //                         "Saw completed job: {}, condition: {}",
+    //                         job.name_any(),
+    //                         finished_type
+    //                     ),
+    //                 )
+    //                 .await;
+    //             if let Err(e) = x {
+    //                 tracing::error!(name, namespace, error = ?e, "Error creating scheduled cronjob event");
+    //                 return Err(e);
+    //             }
+    //             tracing::info!(name, namespace, "after create_scheduled_cronjob_event");
+    //         }
+    //         if finished_type == JobFinishedType::Complete {
+    //             let last_successful_time =
+    //                 &mut cronjob.status.get_or_insert_default().last_successful_time;
 
-                let job_completion_time = job
-                    .status
-                    .as_ref()
-                    .and_then(|status| status.completion_time.clone());
+    //             let job_completion_time = job
+    //                 .status
+    //                 .as_ref()
+    //                 .and_then(|status| status.completion_time.clone());
 
-                if last_successful_time.is_none() {
-                    *last_successful_time = job_completion_time.clone();
-                    *update_status = true;
-                }
+    //             if last_successful_time.is_none() {
+    //                 *last_successful_time = job_completion_time.clone();
+    //                 *update_status = true;
+    //             }
 
-                if let Some(job_completion_time) = job_completion_time {
-                    if last_successful_time.is_none()
-                        || last_successful_time.as_ref().unwrap() < &job_completion_time
-                    {
-                        *last_successful_time = Some(job_completion_time);
-                        *update_status = true;
-                    }
-                }
-            }
-        }
-        Ok(cronjob)
-    }
+    //             if let Some(job_completion_time) = job_completion_time {
+    //                 if last_successful_time.is_none()
+    //                     || last_successful_time.as_ref().unwrap() < &job_completion_time
+    //                 {
+    //                     *last_successful_time = Some(job_completion_time);
+    //                     *update_status = true;
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     Ok(cronjob)
+    // }
 
-    /// 将已经完成的任务从 active_jobs 列表中删除
-    async fn remove_finished_jobs_from_actives<'s>(
-        &self,
-        mut cronjob: CronJob,
-        jobs: &'s [Job],
-        update_status: &mut bool,
-    ) -> Result<(CronJob, BTreeSet<&'s str>), Error> {
-        let namespace = cronjob.namespace().unwrap_or_default();
-        let name = cronjob.name_any();
-        let mut children_jobs = BTreeSet::<&str>::new();
+    // /// 将已经完成的任务从 active_jobs 列表中删除
+    // async fn remove_finished_jobs_from_actives<'s>(
+    //     &self,
+    //     mut cronjob: CronJob,
+    //     jobs: &'s [Job],
+    //     update_status: &mut bool,
+    // ) -> Result<(CronJob, BTreeSet<&'s str>), Error> {
+    //     let namespace = cronjob.namespace().unwrap_or_default();
+    //     let name = cronjob.name_any();
+    //     let mut children_jobs = BTreeSet::<&str>::new();
 
-        tracing::debug!(name, namespace, jobs=?jobs, "remove_finished_jobs_from_actives");
+    //     for (i, job) in jobs.iter().filter(|job| job.uid().is_some()).enumerate() {
+    //         tracing::info!(name, namespace, i, "remove_finished_job_from_actives");
+    //         cronjob = self
+    //             .remove_finished_job_from_actives(
+    //                 &mut children_jobs,
+    //                 cronjob,
+    //                 &namespace,
+    //                 &name,
+    //                 job,
+    //                 update_status,
+    //             )
+    //             .await?;
+    //     }
 
-        for job in jobs.iter().filter(|job| job.uid().is_some()) {
-            cronjob = self
-                .remove_finished_job_from_actives(
-                    &mut children_jobs,
-                    cronjob,
-                    &namespace,
-                    &name,
-                    job,
-                    update_status,
-                )
-                .await?;
-        }
-
-        Ok((cronjob, children_jobs))
-    }
+    //     Ok((cronjob, children_jobs))
+    // }
 
     // async fn remove_missing_jobs_from_active_jobs(
     //     &self,
@@ -786,7 +796,7 @@ impl CronJobReconciler {
                     ));
                 }
 
-                let contains =
+                let _contains =
                     cronjob.contains_active_job(job.uid().as_deref().unwrap_or_default());
 
                 // if contains {
@@ -803,13 +813,6 @@ impl CronJobReconciler {
 
         let name = cronjob.name_any();
         info!(name, namespace, time=?time, "Created job");
-
-        // let active_job_ref = ObjectReference {
-        //     uid: job.meta().uid.clone(),
-        //     namespace: Some(namespace.to_string()),
-        //     name: Some(job.name_any()),
-        //     ..Default::default()
-        // };
 
         let status = cronjob.status.get_or_insert_default();
         status.active_jobs.push(job_ref);

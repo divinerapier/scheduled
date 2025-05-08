@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -34,6 +35,84 @@ const (
 	CronJobPhaseUnknown          CronJobPhase = "Unknown"
 )
 
+type Interval struct {
+	Seconds int32 `json:"seconds,omitempty"`
+}
+
+type TimePoint struct {
+	Hour   uint8 `json:"hour,omitempty"`
+	Minute uint8 `json:"minute,omitempty"`
+}
+
+type DailySchedule struct {
+	TimePoints []TimePoint `json:"timePoints,omitempty"`
+}
+
+type DayOfWeek string
+
+const (
+	DayOfWeekMonday    DayOfWeek = "Monday"
+	DayOfWeekTuesday   DayOfWeek = "Tuesday"
+	DayOfWeekWednesday DayOfWeek = "Wednesday"
+	DayOfWeekThursday  DayOfWeek = "Thursday"
+	DayOfWeekFriday    DayOfWeek = "Friday"
+	DayOfWeekSaturday  DayOfWeek = "Saturday"
+	DayOfWeekSunday    DayOfWeek = "Sunday"
+)
+
+type WeeklySchedule struct {
+	Day       DayOfWeek   `json:"day,omitempty"`
+	TimePoint []TimePoint `json:"timePoint,omitempty"`
+}
+
+type MonthlySchedule struct {
+	Day       uint32      `json:"day,omitempty"`
+	TimePoint []TimePoint `json:"timePoint,omitempty"`
+}
+
+type ScheduleType struct {
+	// +kubebuilder:validation:OneOf
+	Cron *string `json:"cron,omitempty"`
+	// +kubebuilder:validation:OneOf
+	Interval *Interval `json:"interval,omitempty"`
+	// +kubebuilder:validation:OneOf
+	Daily *DailySchedule `json:"daily,omitempty"`
+	// +kubebuilder:validation:OneOf
+	Weekly *WeeklySchedule `json:"weekly,omitempty"`
+	// +kubebuilder:validation:OneOf
+	Monthly *MonthlySchedule `json:"monthly,omitempty"`
+}
+
+// ConcurrencyPolicy describes how the job will be handled.
+// Only one of the following concurrent policies may be specified.
+// If none of the following policies is specified, the default one
+// is ForbidConcurrent.
+// +kubebuilder:validation:Enum=Allow;Forbid;Replace
+type ConcurrencyPolicy string
+
+const (
+	// AllowConcurrent allows CronJobs to run concurrently.
+	AllowConcurrent ConcurrencyPolicy = "Allow"
+
+	// ForbidConcurrent forbids concurrent runs, skipping next run if previous
+	// hasn't finished yet.
+	ForbidConcurrent ConcurrencyPolicy = "Forbid"
+
+	// ReplaceConcurrent cancels currently running job and replaces it with a new one.
+	ReplaceConcurrent ConcurrencyPolicy = "Replace"
+)
+
+type ScheduleRule struct {
+	// +kubebuilder:default=Forbid
+	ConcurrencyPolicy       ConcurrencyPolicy `json:"concurrencyPolicy,omitempty"`
+	EndTime                 *metav1.Time      `json:"endTime,omitempty"`
+	MaxExecutions           *int32            `json:"maxExecutions,omitempty"`
+	MaxRetries              *int32            `json:"maxRetries,omitempty"`
+	Schedule                []ScheduleType    `json:"schedule,omitempty"`
+	StartTime               *metav1.Time      `json:"startTime,omitempty"`
+	StartingDeadlineSeconds *int64            `json:"startingDeadlineSeconds,omitempty"`
+}
+
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
@@ -42,10 +121,12 @@ type CronJobSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	StartTime *metav1.Time `json:"startTime,omitempty"`
-	EndTime   *metav1.Time `json:"endTime,omitempty"`
+	Schedule *ScheduleRule   `json:"schedule,omitempty"`
+	Suspend  *bool           `json:"suspend,omitempty"`
+	Spec     batchv1.JobSpec `json:"spec,omitempty"`
 
-	Spec batchv1.CronJobSpec `json:"spec,omitempty"`
+	FailedJobsHistoryLimit     *int32 `json:"failedJobsHistoryLimit,omitempty"`
+	SuccessfulJobsHistoryLimit *int32 `json:"successfulJobsHistoryLimit,omitempty"`
 }
 
 // CronJobStatus defines the observed state of CronJob.
@@ -53,9 +134,12 @@ type CronJobStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	Phase          CronJobPhase `json:"phase,omitempty"`
-	Message        string       `json:"message,omitempty"`
-	LastUpdateTime *metav1.Time `json:"lastUpdateTime,omitempty"`
+	ActiveJobs         []corev1.ObjectReference `json:"activeJobs,omitempty"`
+	ExecutionCount     int32                    `json:"executionCount,omitempty"`
+	Phase              CronJobPhase             `json:"phase,omitempty"`
+	Message            string                   `json:"message,omitempty"`
+	LastSuccessfulTime *metav1.Time             `json:"lastSuccessfulTime,omitempty"`
+	LastScheduleTime   *metav1.Time             `json:"lastScheduleTime,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -164,11 +164,6 @@ pub struct CronJobSpec {
     /// Specifies the job that will be created when executing a CronJob.
     pub spec: JobSpec,
 
-    /// Optional deadline in seconds for starting the job if it misses scheduled time for any reason.  Missed jobs executions
-    /// will be counted as failed ones.
-    #[builder(default = None)]
-    pub starting_deadline_seconds: Option<i64>,
-
     /// The number of successful finished jobs to retain. Value must be non-negative integer. Defaults to 3.
     #[builder(default = Some(3))]
     pub successful_jobs_history_limit: Option<i32>,
@@ -296,14 +291,21 @@ impl CronJob {
 
         // 如果设置了最大等待时间，则需要检查是否超过了最大等待时间
 
+        let starting_deadline_seconds = self
+            .spec
+            .schedule
+            .as_ref()
+            .map(|schedule| schedule.starting_deadline_seconds)
+            .flatten();
+
         tracing::info!(
             name = self.name_any(),
             namespace = self.namespace().unwrap_or_default(),
-            starting_deadline_seconds = ?self.spec.starting_deadline_seconds,
+            starting_deadline_seconds = ?starting_deadline_seconds,
             next_time = ?next_time,
         );
 
-        let next_time = match self.spec.starting_deadline_seconds {
+        let next_time = match starting_deadline_seconds {
             // 如果 next_time + 最大等待时间 >= 当前时间，则说明应该运行了
             Some(seconds) if next_time + Duration::seconds(seconds) >= now => {
                 tracing::warn!(
