@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -48,9 +49,10 @@ func main() {
 		Spec: v1alpha1.CronJobSpec{
 			Schedule: &v1alpha1.ScheduleRule{
 				ConcurrencyPolicy: v1alpha1.ForbidConcurrent,
+				MaxExecutions:     ptr.To(int32(1)),
 				Schedule: []v1alpha1.ScheduleType{{
 					Interval: &v1alpha1.Interval{
-						Seconds: 30,
+						Seconds: 10,
 					},
 				}},
 			},
@@ -64,7 +66,7 @@ func main() {
 							Command: []string{
 								"/bin/bash",
 								"-c",
-								"echo \"starting ...\" && sleep 10 && echo \"done\"",
+								"echo \"starting ...\" && sleep 60 && echo \"done\"",
 							},
 						}},
 					},
