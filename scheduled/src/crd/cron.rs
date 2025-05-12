@@ -193,6 +193,9 @@ impl CronJob {
 
         if let Some(schedule) = self.spec.schedule.as_ref() {
             if let Some(max_executions) = schedule.max_executions {
+                if execution_count == max_executions && self.active_jobs_count() > 0 {
+                    return Some(now + Duration::seconds(5 * 50));
+                }
                 if execution_count >= max_executions {
                     return None;
                 }
