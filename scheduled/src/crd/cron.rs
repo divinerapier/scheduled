@@ -3,7 +3,7 @@ use derive_builder::Builder;
 use k8s_openapi::api::batch::v1::{
     CronJob as K8sCronJob, CronJobSpec as K8sCronJobSpec, Job, JobSpec,
 };
-use k8s_openapi::api::core::v1::ObjectReference;
+use k8s_openapi::api::core::v1::{EnvVar, ObjectReference};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kube::core::object::HasStatus;
 use kube::{CELSchema, Resource as _};
@@ -181,6 +181,12 @@ impl CronJobSpec {
 }
 
 impl CronJob {
+    pub const ENV_SCHEDULED_JOB_NAMESPACE: &'static str = "SCHEDULED_JOB_NAMESPACE";
+    pub const ENV_SCHEDULED_JOB_NAME: &'static str = "SCHEDULED_JOB_NAME";
+
+    pub const FIELD_REF_NAMESPACE: &'static str = "metadata.namespace";
+    pub const FIELD_REF_NAME: &'static str = "metadata.name";
+
     /// 本函数负责计算，基于最近一次成功调度时间之后的下一个调度时间。最近成功时间可以为空，表示还没有成功调度过。
     ///
     /// 如果，最近成功调度时间 `last_schedule_time` 为空，则返回创建时间和开始时间的较大值
@@ -426,7 +432,7 @@ impl CronJob {
         let mut job = Job {
             metadata: ObjectMeta {
                 namespace: Some(self.namespace().unwrap_or_default()),
-                name: Some(name),
+                name: Some(name.clone()),
                 annotations: Some(self.annotations().clone()),
                 labels: Some(self.labels().clone()),
                 owner_references: Some(vec![self.controller_owner_ref(&()).unwrap()]),
@@ -436,6 +442,40 @@ impl CronJob {
             spec: Some(self.spec.spec.clone()),
             status: None,
         };
+
+        // Inject Job metadata as env vars into all containers
+        if let Some(spec) = job.spec.as_mut() {
+            if let Some(pod_spec) = spec.template.spec.as_mut() {
+                let envs = vec![
+                    EnvVar {
+                        name: Self::ENV_SCHEDULED_JOB_NAMESPACE.to_string(),
+                        value: None,
+                        value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
+                            field_ref: Some(k8s_openapi::api::core::v1::ObjectFieldSelector {
+                                field_path: Self::FIELD_REF_NAMESPACE.to_string(),
+                                api_version: None,
+                            }),
+                            ..Default::default()
+                        }),
+                    },
+                    EnvVar {
+                        name: Self::ENV_SCHEDULED_JOB_NAME.to_string(),
+                        value: None,
+                        value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
+                            field_ref: Some(k8s_openapi::api::core::v1::ObjectFieldSelector {
+                                field_path: Self::FIELD_REF_NAME.to_string(),
+                                api_version: None,
+                            }),
+                            ..Default::default()
+                        }),
+                    },
+                ];
+                for container in &mut pod_spec.containers {
+                    let container_env = container.env.get_or_insert_with(Vec::new);
+                    container_env.extend(envs.clone());
+                }
+            }
+        }
 
         if let Some(ref rule) = self.spec.schedule {
             if let Some(max_retries) = rule.max_retries {
