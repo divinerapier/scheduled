@@ -429,12 +429,22 @@ impl CronJob {
 
     pub fn batch_job(&self, schedule_time: &DateTime<Local>) -> Job {
         let name = self.job_name(&schedule_time);
+        // 构造 labels，包含原有 labels 和 cronjob 关联信息
+        let mut labels = self.labels().clone();
+        labels.insert(
+            "scheduled.divinerapier.io/cronjob-namespace".to_string(),
+            self.namespace().unwrap_or_default(),
+        );
+        labels.insert(
+            "scheduled.divinerapier.io/cronjob-name".to_string(),
+            self.name_any(),
+        );
         let mut job = Job {
             metadata: ObjectMeta {
                 namespace: Some(self.namespace().unwrap_or_default()),
                 name: Some(name.clone()),
                 annotations: Some(self.annotations().clone()),
-                labels: Some(self.labels().clone()),
+                labels: Some(labels),
                 owner_references: Some(vec![self.controller_owner_ref(&()).unwrap()]),
                 creation_timestamp: Some(Time(schedule_time.with_timezone(&Utc))),
                 ..Default::default()
