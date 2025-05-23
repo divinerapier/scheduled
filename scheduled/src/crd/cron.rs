@@ -184,8 +184,9 @@ impl CronJob {
     pub const ENV_SCHEDULED_JOB_NAMESPACE: &'static str = "SCHEDULED_JOB_NAMESPACE";
     pub const ENV_SCHEDULED_JOB_NAME: &'static str = "SCHEDULED_JOB_NAME";
 
-    pub const FIELD_REF_NAMESPACE: &'static str = "metadata.namespace";
-    pub const FIELD_REF_NAME: &'static str = "metadata.name";
+    pub const LABEL_SCHEDULED_JOB_NAMESPACE: &'static str =
+        "scheduled.divinerapier.io/cronjob-namespace";
+    pub const LABEL_SCHEDULED_JOB_NAME: &'static str = "scheduled.divinerapier.io/cronjob-name";
 
     /// 本函数负责计算，基于最近一次成功调度时间之后的下一个调度时间。最近成功时间可以为空，表示还没有成功调度过。
     ///
@@ -428,20 +429,22 @@ impl CronJob {
     }
 
     pub fn batch_job(&self, schedule_time: &DateTime<Local>) -> Job {
+        let cronjob_namespace = self.namespace().unwrap_or_default();
+        let cronjob_name = self.name_any();
         let name = self.job_name(&schedule_time);
         // 构造 labels，包含原有 labels 和 cronjob 关联信息
         let mut labels = self.labels().clone();
         labels.insert(
-            "scheduled.divinerapier.io/cronjob-namespace".to_string(),
-            self.namespace().unwrap_or_default(),
+            Self::LABEL_SCHEDULED_JOB_NAMESPACE.to_string(),
+            cronjob_namespace.clone(),
         );
         labels.insert(
-            "scheduled.divinerapier.io/cronjob-name".to_string(),
-            self.name_any(),
+            Self::LABEL_SCHEDULED_JOB_NAME.to_string(),
+            cronjob_name.clone(),
         );
         let mut job = Job {
             metadata: ObjectMeta {
-                namespace: Some(self.namespace().unwrap_or_default()),
+                namespace: Some(cronjob_namespace.clone()),
                 name: Some(name.clone()),
                 annotations: Some(self.annotations().clone()),
                 labels: Some(labels),
@@ -459,25 +462,13 @@ impl CronJob {
                 let envs = vec![
                     EnvVar {
                         name: Self::ENV_SCHEDULED_JOB_NAMESPACE.to_string(),
-                        value: None,
-                        value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
-                            field_ref: Some(k8s_openapi::api::core::v1::ObjectFieldSelector {
-                                field_path: Self::FIELD_REF_NAMESPACE.to_string(),
-                                api_version: None,
-                            }),
-                            ..Default::default()
-                        }),
+                        value: Some(cronjob_namespace),
+                        value_from: None,
                     },
                     EnvVar {
                         name: Self::ENV_SCHEDULED_JOB_NAME.to_string(),
-                        value: None,
-                        value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
-                            field_ref: Some(k8s_openapi::api::core::v1::ObjectFieldSelector {
-                                field_path: Self::FIELD_REF_NAME.to_string(),
-                                api_version: None,
-                            }),
-                            ..Default::default()
-                        }),
+                        value: Some(cronjob_name),
+                        value_from: None,
                     },
                 ];
                 for container in &mut pod_spec.containers {
