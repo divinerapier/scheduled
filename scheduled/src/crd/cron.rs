@@ -181,12 +181,12 @@ impl CronJobSpec {
 }
 
 impl CronJob {
-    pub const ENV_SCHEDULED_JOB_NAMESPACE: &'static str = "SCHEDULED_JOB_NAMESPACE";
-    pub const ENV_SCHEDULED_JOB_NAME: &'static str = "SCHEDULED_JOB_NAME";
+    pub const ENV_SCHEDULED_CRONJOB_NAMESPACE: &'static str = "SCHEDULED_CRONJOB_NAMESPACE";
+    pub const ENV_SCHEDULED_CRONJOB_NAME: &'static str = "SCHEDULED_CRONJOB_NAME";
 
-    pub const LABEL_SCHEDULED_JOB_NAMESPACE: &'static str =
+    pub const LABEL_SCHEDULED_CRONJOB_NAMESPACE: &'static str =
         "scheduled.divinerapier.io/cronjob-namespace";
-    pub const LABEL_SCHEDULED_JOB_NAME: &'static str = "scheduled.divinerapier.io/cronjob-name";
+    pub const LABEL_SCHEDULED_CRONJOB_NAME: &'static str = "scheduled.divinerapier.io/cronjob-name";
 
     /// 本函数负责计算，基于最近一次成功调度时间之后的下一个调度时间。最近成功时间可以为空，表示还没有成功调度过。
     ///
@@ -435,11 +435,11 @@ impl CronJob {
         // 构造 labels，包含原有 labels 和 cronjob 关联信息
         let mut labels = self.labels().clone();
         labels.insert(
-            Self::LABEL_SCHEDULED_JOB_NAMESPACE.to_string(),
+            Self::LABEL_SCHEDULED_CRONJOB_NAMESPACE.to_string(),
             cronjob_namespace.clone(),
         );
         labels.insert(
-            Self::LABEL_SCHEDULED_JOB_NAME.to_string(),
+            Self::LABEL_SCHEDULED_CRONJOB_NAME.to_string(),
             cronjob_name.clone(),
         );
         let mut job = Job {
@@ -461,12 +461,12 @@ impl CronJob {
             if let Some(pod_spec) = spec.template.spec.as_mut() {
                 let envs = vec![
                     EnvVar {
-                        name: Self::ENV_SCHEDULED_JOB_NAMESPACE.to_string(),
+                        name: Self::ENV_SCHEDULED_CRONJOB_NAMESPACE.to_string(),
                         value: Some(cronjob_namespace),
                         value_from: None,
                     },
                     EnvVar {
-                        name: Self::ENV_SCHEDULED_JOB_NAME.to_string(),
+                        name: Self::ENV_SCHEDULED_CRONJOB_NAME.to_string(),
                         value: Some(cronjob_name),
                         value_from: None,
                     },
