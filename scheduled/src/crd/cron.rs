@@ -183,6 +183,7 @@ impl CronJobSpec {
 impl CronJob {
     pub const ENV_SCHEDULED_CRONJOB_NAMESPACE: &'static str = "SCHEDULED_CRONJOB_NAMESPACE";
     pub const ENV_SCHEDULED_CRONJOB_NAME: &'static str = "SCHEDULED_CRONJOB_NAME";
+    pub const ENV_K8S_BATCH_JOB_NAME: &'static str = "K8S_BATCH_JOB_NAME";
 
     pub const LABEL_SCHEDULED_CRONJOB_NAMESPACE: &'static str =
         "scheduled.divinerapier.io/cronjob-namespace";
@@ -468,6 +469,11 @@ impl CronJob {
                     EnvVar {
                         name: Self::ENV_SCHEDULED_CRONJOB_NAME.to_string(),
                         value: Some(cronjob_name),
+                        value_from: None,
+                    },
+                    EnvVar {
+                        name: Self::ENV_K8S_BATCH_JOB_NAME.to_string(),
+                        value: Some(name.clone()),
                         value_from: None,
                     },
                 ];
