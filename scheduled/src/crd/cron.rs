@@ -443,6 +443,31 @@ impl CronJob {
             Self::LABEL_SCHEDULED_CRONJOB_NAME.to_string(),
             cronjob_name.clone(),
         );
+
+        let mut job_spec = self.spec.spec.clone();
+        match job_spec.template.metadata.as_mut() {
+            Some(metadata) => {
+                if let Some(labels) = metadata.labels.as_mut() {
+                    labels.insert(
+                        Self::LABEL_SCHEDULED_CRONJOB_NAMESPACE.to_string(),
+                        cronjob_namespace.clone(),
+                    );
+                } else {
+                    let mut labels = std::collections::BTreeMap::new();
+                    labels.insert(
+                        Self::LABEL_SCHEDULED_CRONJOB_NAMESPACE.to_string(),
+                        cronjob_namespace.clone(),
+                    );
+                    metadata.labels = Some(labels);
+                }
+            }
+            None => {
+                let mut metadata = ObjectMeta::default();
+                metadata.labels = Some(labels.clone());
+                job_spec.template.metadata = Some(metadata);
+            }
+        }
+
         let mut job = Job {
             metadata: ObjectMeta {
                 namespace: Some(cronjob_namespace.clone()),
