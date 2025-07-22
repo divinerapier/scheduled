@@ -30,27 +30,12 @@ async fn main() -> Result<(), kube::Error> {
     tokio::select! {
         _ = run_scheduled_cronjob_controller(scheduled_cronjobs, jobs.clone(), ctx.clone()) => {},
         _ = run_delayed_job_controller(delayed_jobs, jobs, ctx.clone()) => {},
+        // 增加一个响应 ctrl-c 的信号，当收到信号时，强制退出程序
+        _ = tokio::signal::ctrl_c() => {
+            info!("ctrl-c received, force shutting down");
+            std::process::exit(0);
+        }
     }
-
-    // let (tx, _) = tokio::sync::broadcast::channel::<()>(1);
-
-    // let trigger = tx.clone();
-    // tokio::spawn(async move {
-    //     tracing::info!("press ctrl+c to shut down gracefully");
-    //     tokio::signal::ctrl_c().await.unwrap();
-    //     let _ = trigger.send(());
-    //     tracing::info!("graceful shutdown requested, press ctrl+c again to force shutdown");
-    // });
-
-    // tokio::join!(
-    //     run_scheduled_cronjob_controller(
-    //         scheduled_cronjobs,
-    //         jobs.clone(),
-    //         ctx.clone(),
-    //         tx.subscribe()
-    //     ),
-    //     // run_delayed_job_controller(delayed_jobs, jobs, ctx.clone(), tx.subscribe())
-    // );
 
     Ok(())
 }
@@ -62,7 +47,6 @@ async fn run_scheduled_cronjob_controller(
 ) {
     info!("run_scheduled_cronjob_controller");
     Controller::new(scheduled_cronjobs.clone(), Default::default())
-        .shutdown_on_signal()
         .owns(jobs, Default::default())
         .run(
             reconcile_scheduled_cronjob,
@@ -80,7 +64,6 @@ async fn run_delayed_job_controller(
 ) {
     info!("run_delayed_job_controller");
     Controller::new(delayed_jobs.clone(), Default::default())
-        .shutdown_on_signal()
         .owns(jobs, Default::default())
         .run(reconcile_delayed_job, scheduled::error_policy, ctx.clone())
         .for_each(|_| futures::future::ready(()))
