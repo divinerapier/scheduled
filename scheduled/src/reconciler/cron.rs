@@ -317,6 +317,7 @@ impl CronJobReconciler {
     async fn reconcile(&self, job: Arc<CronJob>) -> Result<(Action, CronJob, bool), Error> {
         let name = job.name_any();
         let namespace = job.namespace().unwrap_or_default();
+
         info!(name, namespace, "Starting cronjob reconciliation");
 
         // Check current status if it is ok to run. The following cases are considered:

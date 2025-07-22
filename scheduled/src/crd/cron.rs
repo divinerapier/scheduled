@@ -11,7 +11,7 @@ use kube::{CustomResource, ResourceExt, api::ObjectMeta};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::spec::ScheduleRule;
+use super::spec::{ConcurrencyPolicy, DailySchedule, ScheduleRule, ScheduleType, TimePoint};
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, JsonSchema, PartialEq, Eq)]
 pub enum CronJobPhase {
@@ -212,6 +212,7 @@ impl CronJob {
 
         // 获取最近一次调度成功时间，如果 anchor 不为空，则使用 anchor 作为基准时间
         // 否则，使用 status 中的 last_successful_time 作为基准时间
+        // 这里就是 now - 20min
         let last_successful_time = anchor.or_else(|| {
             self.status()
                 .as_ref()
@@ -334,18 +335,71 @@ impl CronJob {
                 let mut next_time1 = next_time;
                 let mut missing_count = 0;
                 let mut next_time = next_time;
+                let mut loop_count = 0;
+                const MAX_LOOP_COUNT: usize = 1000; // 防止死循环
+
+                tracing::debug!(
+                    name = self.name_any(),
+                    namespace = self.namespace().unwrap_or_default(),
+                    initial_next_time = ?next_time,
+                    now = ?now,
+                    "Starting loop to find next valid schedule time"
+                );
+
                 loop {
+                    loop_count += 1;
+                    if loop_count >= MAX_LOOP_COUNT {
+                        tracing::error!(
+                            name = self.name_any(),
+                            namespace = self.namespace().unwrap_or_default(),
+                            loop_count,
+                            "Infinite loop detected in next_schedule_time calculation"
+                        );
+                        break;
+                    }
+
+                    tracing::debug!(
+                        name = self.name_any(),
+                        namespace = self.namespace().unwrap_or_default(),
+                        loop_count,
+                        current_next_time = ?next_time,
+                        "Loop iteration"
+                    );
+
                     match self.next_schedule_time_after(now, Some(next_time)) {
                         Some(next_next_time) => {
+                            // 检查时间是否真的推进了
+                            if next_next_time <= next_time {
+                                tracing::error!(
+                                    name = self.name_any(),
+                                    namespace = self.namespace().unwrap_or_default(),
+                                    next_time = ?next_time,
+                                    next_next_time = ?next_next_time,
+                                    "Schedule time not advancing - potential infinite loop"
+                                );
+                                break;
+                            }
+
                             next_time0 = next_time1;
                             next_time1 = next_time;
                             if next_time > now {
+                                tracing::debug!(
+                                    name = self.name_any(),
+                                    namespace = self.namespace().unwrap_or_default(),
+                                    found_valid_time = ?next_time,
+                                    "Found valid schedule time"
+                                );
                                 break;
                             }
                             missing_count += 1;
                             next_time = next_next_time;
                         }
                         None => {
+                            tracing::debug!(
+                                name = self.name_any(),
+                                namespace = self.namespace().unwrap_or_default(),
+                                "No more schedule times available"
+                            );
                             next_time0 = next_time1;
                             break;
                         }
@@ -937,6 +991,40 @@ mod tests {
                 .with_expectation(Local::now() + Duration::minutes(7))
                 .with_expectation(Local::now() + Duration::minutes(10))
                 .with_expectation(None)
+                .with_expectation(None)
+                .build(),
+            TestCase::builder("between_start_end_time3")
+                .with_schedule(DailySchedule {
+                    time_points: vec![TimePoint {
+                        hour: 9,
+                        minute: 52,
+                    }],
+                })
+                .with_concurrency_policy(ConcurrencyPolicy::Allow)
+                .with_start_time(Some(Local.with_ymd_and_hms(2025, 7, 21, 16, 0, 0).unwrap()))
+                .with_end_time(Some(Local.with_ymd_and_hms(2025, 7, 23, 16, 0, 0).unwrap()))
+                .with_max_retries(2)
+                .with_starting_deadline_seconds(None)
+                .with_expectation(Local.with_ymd_and_hms(2025, 7, 21, 9, 52, 0).unwrap())
+                .with_expectation(Local.with_ymd_and_hms(2025, 7, 22, 9, 52, 0).unwrap())
+                .with_expectation(Local.with_ymd_and_hms(2025, 7, 23, 9, 52, 0).unwrap())
+                .with_expectation(None)
+                .build(),
+            TestCase::builder("deadloop_prevention_test")
+                .with_schedule(DailySchedule {
+                    time_points: vec![TimePoint {
+                        hour: 9,
+                        minute: 52,
+                    }],
+                })
+                .with_concurrency_policy(ConcurrencyPolicy::Forbid)
+                .with_start_time(Some(Local.with_ymd_and_hms(2025, 7, 21, 16, 0, 0).unwrap()))
+                .with_end_time(Some(Local.with_ymd_and_hms(2025, 7, 23, 16, 0, 0).unwrap()))
+                .with_max_retries(2)
+                .with_starting_deadline_seconds(None)
+                .with_last_successful_time(Local.with_ymd_and_hms(2025, 7, 22, 1, 50, 15).unwrap())
+                .with_expectation(Local.with_ymd_and_hms(2025, 7, 22, 9, 52, 0).unwrap())
+                .with_expectation(Local.with_ymd_and_hms(2025, 7, 23, 9, 52, 0).unwrap())
                 .with_expectation(None)
                 .build(),
         ];

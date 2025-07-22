@@ -57,8 +57,8 @@ impl ScheduleRule {
     pub fn next(
         &self,
         executions_count: u32,
-        now: DateTime<Local>,
-        last_schedule_time: Option<DateTime<Local>>,
+        now: DateTime<Local>,                        // now
+        last_schedule_time: Option<DateTime<Local>>, // now -20min
     ) -> Option<DateTime<Local>> {
         // 检查执行次数是否达到最大
         if let Some(max_executions) = self.max_executions {
@@ -69,22 +69,33 @@ impl ScheduleRule {
 
         // 检查开始时间
         let last_time = match (last_schedule_time, &self.start_time) {
+            // now - 20min, now - 1h
             (Some(last_schedule_time), Some(start_time)) => {
                 assert!(last_schedule_time >= start_time.0.with_timezone(&Local));
                 last_schedule_time
             }
             (Some(last_schedule_time), None) => last_schedule_time,
-            (None, Some(start_time)) => return Some(start_time.0.with_timezone(&Local)),
+            (None, Some(start_time)) => {
+                // 首次调度，从 start_time 开始计算下一个调度时间
+                let start_time_local = start_time.0.with_timezone(&Local);
+                // 如果 start_time 晚于当前时间，直接返回 start_time
+                if start_time_local > now {
+                    return Some(start_time_local);
+                }
+                // 否则从 start_time 开始计算下一个调度时间
+                start_time_local
+            }
             (_, _) => now,
         };
 
-        // 如果还没有到开始时间，则返回开始时间
+        // 如果有结束时间且当前时间大于结束时间，则返回 None 表示调度结束
         if let Some(ref end_time) = self.end_time {
             if now >= end_time.0.with_timezone(&Local) {
                 return None;
             }
         }
 
+        // 基于上次调度时间(包括上次成功调度时间，配置的开始时间，当前时间等多种情况)
         let next_time = self.schedule.next(Some(last_time))?;
 
         if let Some(ref end_time) = self.end_time {
@@ -169,7 +180,7 @@ impl DailySchedule {
             .into_iter()
             .map(|dt| dt + Duration::from_secs(24 * 60 * 60))
             .chain(time_points)
-            .filter(|dt| dt >= &previous)
+            .filter(|dt| dt > &previous) // 改为严格大于，避免返回相同时间
             .min()
     }
 }
@@ -215,7 +226,7 @@ impl WeeklySchedule {
                     .and_local_timezone(Local)
                     .unwrap()
             })
-            .filter(|dt| dt >= &previous)
+            .filter(|dt| dt > &previous)
             .min()
     }
 }
@@ -255,7 +266,7 @@ impl MonthlySchedule {
                     .and_local_timezone(Local)
                     .unwrap()
             })
-            .filter(|dt| dt >= &previous)
+            .filter(|dt| dt > &previous)
             .min()
     }
 }
