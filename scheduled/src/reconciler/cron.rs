@@ -526,6 +526,110 @@ impl CronJobReconciler {
             }
         }
 
+        if let Some(next_schedule_time) = cronjob
+            .status
+            .as_ref()
+            .and_then(|status| status.next_schedule_time.as_ref())
+        {
+            // 上次计算的调度时间
+            let next_schedule_time = next_schedule_time.0.with_timezone(&Local);
+            // 最大等待时间
+            let not_arrived = now < next_schedule_time;
+            tracing::info!(name, namespace, now=?now, next_schedule_time=?next_schedule_time, not_arrived = not_arrived, "next_schedule_time");
+            if not_arrived {
+                return Ok((Some(next_schedule_time), cronjob));
+            }
+            let starting_deadline_seconds = cronjob
+                .spec
+                .schedule
+                .as_ref()
+                .and_then(|schedule| schedule.starting_deadline_seconds)
+                .unwrap_or(120); // 默认等待 120 秒
+            // 最晚运行时间 = 上次计算的调度时间 + 最大等待时间
+            let starting_deadline =
+                next_schedule_time + Duration::from_secs(starting_deadline_seconds as u64);
+            let missed = now > starting_deadline;
+            tracing::info!(name, namespace, starting_deadline=?starting_deadline, now=?now, missed = missed, "check missed");
+            // 当前时间晚于计算的最大调度截止时间，说明不在运行上次的任务
+            if missed {
+                // 计算下一次的调度时间
+                let next_time = cronjob.next_schedule_time(now).unwrap();
+                let status = cronjob.status.get_or_insert_default();
+                status.next_schedule_time = Some(Time(next_time.to_utc()));
+                status.last_successful_time = Some(Time(now.to_utc()));
+                *update_status = true;
+                return Ok((Some(next_time), cronjob));
+            }
+            // 判断任务是否在运行
+
+            // 这个任务已经存在了，则返回下一次要执行的时间
+            if self.check_job_exists(&mut cronjob, &next_schedule_time) {
+                tracing::info!(name, namespace, schedule_time=?next_schedule_time, "job exists");
+                return Ok((
+                    cronjob.next_schedule_time_after(now, Some(next_schedule_time)),
+                    cronjob,
+                ));
+            }
+
+            // 根据 concurrency_policy 处理已经存在的任务
+            let next_time = match self
+                .process_concurrency_policy(&mut cronjob, now, next_schedule_time, update_status)
+                .await?
+            {
+                Some(next_time) => next_time,
+                None => {
+                    return Ok((None, cronjob));
+                }
+            };
+
+            tracing::info!(name, namespace, current_schedule_time=?next_schedule_time, adviced_schedule_time=?next_time, "check process_concurrency_policy");
+            if next_time == next_schedule_time {
+                // 说明当前时间可以运行
+                info!(name, namespace, "Ready to create job");
+                self.create_job(&mut cronjob, &next_time, update_status)
+                    .await?;
+
+                // // 获取下一次任务执行的时间，如果 cronjob 已经结束，则返回 None
+                // let next_time = match cronjob.next_schedule_time(now) {
+                //     Some(next_time) => next_time,
+                //     None => {
+                //         info!(name, namespace, "No next schedule time");
+                //         cronjob.status.get_or_insert_default().phase = CronJobPhase::Completed;
+                //         return Ok((None, cronjob));
+                //     }
+                // };
+
+                // return Ok((Some(next_time), cronjob));
+
+                match cronjob.next_schedule_time(now) {
+                    Some(next_time) => {
+                        let status = cronjob.status.get_or_insert_default();
+                        status.phase = CronJobPhase::Running;
+                        status.last_successful_time = Some(Time(now.to_utc()));
+                        status.last_schedule_time = Some(Time(now.to_utc()));
+                        status.execution_count += 1;
+                        status.next_schedule_time = Some(Time(next_time.to_utc()));
+                        *update_status = true;
+                        return Ok((Some(next_time), cronjob));
+                    }
+                    None => {
+                        info!(name, namespace, "No next schedule time");
+                        cronjob.status.get_or_insert_default().phase = CronJobPhase::Completed;
+                        return Ok((None, cronjob));
+                    }
+                }
+            } else {
+                let status = cronjob.status.get_or_insert_default();
+                status.phase = CronJobPhase::Running;
+                status.last_successful_time = Some(Time(now.to_utc()));
+                status.last_schedule_time = Some(Time(now.to_utc()));
+                status.execution_count += 1;
+                status.next_schedule_time = Some(Time(next_time.to_utc()));
+                *update_status = true;
+                return Ok((Some(next_time), cronjob));
+            }
+        }
+
         info!(name, namespace, "before next_schedule_time");
 
         // 获取下一次任务执行的时间，如果 cronjob 已经结束，则返回 None
@@ -543,6 +647,9 @@ impl CronJobReconciler {
         // 下次执行时间超过当前时间，表明暂时没有到达执行时间，返回目标时间
         if next_time > now {
             info!(name, namespace, next_time = ?next_time, "Next time is in the future");
+            let status = cronjob.status.get_or_insert_default();
+            status.next_schedule_time = Some(Time(next_time.to_utc()));
+            *update_status = true;
             return Ok((Some(next_time), cronjob));
         }
 
