@@ -12,7 +12,9 @@ use kube::{
     Api, ResourceExt as _,
     api::{DeleteParams, ObjectMeta},
 };
-use scheduled::{CronJob, CronJobSpec, Interval, ScheduleRule, ScheduleType};
+use scheduled::{
+    CronJob, CronJobSpec, DailySchedule, Interval, ScheduleRule, ScheduleType, TimePoint,
+};
 
 #[tokio::main]
 async fn main() {
@@ -22,14 +24,20 @@ async fn main() {
         .schedule(
             ScheduleRule::builder()
                 .start_time(Some(Time(
-                    DateTime::parse_from_rfc3339("2025-04-16T17:44:00+08:00")
+                    DateTime::parse_from_rfc3339("2025-07-30T10:20:00+08:00")
                         .unwrap()
                         .to_utc(),
                 )))
                 .schedule(
-                    vec![ScheduleType::Interval(Interval::from(Duration::from_secs(
-                        10,
-                    )))]
+                    vec![
+                        ScheduleType::Daily(DailySchedule {
+                            time_points: vec![TimePoint {
+                                hour: 15,
+                                minute: 2,
+                            }],
+                        }),
+                        // ScheduleType::Interval(Interval { seconds: 30 }),
+                    ]
                     .into(),
                 )
                 .build()
@@ -41,7 +49,7 @@ async fn main() {
                 spec: Some(PodSpec {
                     containers: vec![Container {
                         name: "test-container".to_string(),
-                        image: Some("ubuntu:24.04".to_string()),
+                        image: Some("ubuntu:22.04".to_string()),
                         command: Some(["/bin/bash", "-c", "sleep 10"].map(String::from).to_vec()),
                         ..Default::default()
                     }],

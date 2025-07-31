@@ -98,6 +98,12 @@ impl ScheduleRule {
         // 基于上次调度时间(包括上次成功调度时间，配置的开始时间，当前时间等多种情况)
         let next_time = self.schedule.next(Some(last_time))?;
 
+        tracing::info!(
+            last_time = ?last_time,
+            next_time = ?next_time,
+            "next time"
+        );
+
         if let Some(ref end_time) = self.end_time {
             if next_time >= end_time.0.with_timezone(&Local) {
                 return None;
@@ -126,12 +132,13 @@ impl From<std::time::Duration> for Interval {
 
 impl Interval {
     pub fn next(&self, previous_run_time: Option<DateTime<Local>>) -> Option<DateTime<Local>> {
-        match previous_run_time {
-            Some(previous_run_time) => {
-                Some(previous_run_time + Duration::from_secs(self.seconds as u64))
-            }
-            None => Some(Local::now()),
-        }
+        let now = Local::now();
+        let previous = previous_run_time.unwrap_or(now);
+
+        // 如果 previous 早于当前时间，从当前时间开始计算
+        let base_time = if previous < now { now } else { previous };
+
+        Some(base_time + Duration::from_secs(self.seconds as u64))
     }
 }
 
@@ -164,9 +171,17 @@ pub struct DailySchedule {
 
 impl DailySchedule {
     pub fn next(&self, previous_run_time: Option<DateTime<Local>>) -> Option<DateTime<Local>> {
-        let previous = previous_run_time.unwrap_or(Local::now());
+        let now = Local::now();
+        println!("now: {:?}", now);
+        let previous = previous_run_time.unwrap_or(now);
+        println!("previous: {:?}", previous);
+
+        // 如果 previous 早于当前时间，从当前时间开始计算
+        let base_time = if previous < now { now } else { previous };
+        println!("base_time: {:?}", base_time);
+
         let time_points = self.time_points.iter().map(|tp| {
-            previous
+            base_time
                 .clone()
                 .date_naive()
                 .and_hms_opt(tp.hour as u32, tp.minute as u32, 0)
@@ -180,7 +195,7 @@ impl DailySchedule {
             .into_iter()
             .map(|dt| dt + Duration::from_secs(24 * 60 * 60))
             .chain(time_points)
-            .filter(|dt| dt > &previous) // 改为严格大于，避免返回相同时间
+            .filter(|dt| dt > &base_time) // 改为严格大于，避免返回相同时间
             .min()
     }
 }
@@ -204,16 +219,20 @@ pub struct WeeklySchedule {
 
 impl WeeklySchedule {
     pub fn next(&self, previous_run_time: Option<DateTime<Local>>) -> Option<DateTime<Local>> {
-        let previous = previous_run_time.unwrap_or(Local::now());
-        let previous_weekday = previous.weekday();
+        let now = Local::now();
+        let previous = previous_run_time.unwrap_or(now);
+
+        // 如果 previous 早于当前时间，从当前时间开始计算
+        let base_time = if previous < now { now } else { previous };
+        let base_weekday = base_time.weekday();
         let target_weekday = chrono::Weekday::from(self.day);
 
         let days_until_next = (target_weekday.num_days_from_monday() as i64
-            - previous_weekday.num_days_from_monday() as i64
+            - base_weekday.num_days_from_monday() as i64
             + 7)
             % 7;
 
-        let first_date = previous.date_naive() + Days::new(days_until_next as u64);
+        let first_date = base_time.date_naive() + Days::new(days_until_next as u64);
         let next_date = first_date + Days::new(7);
 
         [first_date, next_date]
@@ -226,7 +245,7 @@ impl WeeklySchedule {
                     .and_local_timezone(Local)
                     .unwrap()
             })
-            .filter(|dt| dt > &previous)
+            .filter(|dt| dt > &base_time)
             .min()
     }
 }
@@ -250,10 +269,14 @@ pub struct MonthlySchedule {
 
 impl MonthlySchedule {
     pub fn next(&self, previous_run_time: Option<DateTime<Local>>) -> Option<DateTime<Local>> {
-        let previous = previous_run_time.unwrap_or(Local::now());
+        let now = Local::now();
+        let previous = previous_run_time.unwrap_or(now);
+
+        // 如果 previous 早于当前时间，从当前时间开始计算
+        let base_time = if previous < now { now } else { previous };
         let target_day = self.day;
 
-        let first_date = previous.date_naive().with_day(target_day).unwrap();
+        let first_date = base_time.date_naive().with_day(target_day).unwrap();
         let next_date = first_date + Months::new(1);
 
         [first_date, next_date]
@@ -266,7 +289,7 @@ impl MonthlySchedule {
                     .and_local_timezone(Local)
                     .unwrap()
             })
-            .filter(|dt| dt > &previous)
+            .filter(|dt| dt > &base_time)
             .min()
     }
 }
@@ -338,6 +361,10 @@ impl Schedule {
             .map(|schedule| schedule.next(last_schedule_time))
             .min()
             .flatten()
+    }
+
+    pub fn first_schedule_type(&self) -> Option<&ScheduleType> {
+        self.0.first()
     }
 }
 

@@ -69,6 +69,9 @@ pub struct CronJobStatus {
 
     /// The time the last job was scheduled
     pub last_schedule_time: Option<Time>,
+
+    /// The time the next job will be scheduled
+    pub next_schedule_time: Option<Time>,
 }
 
 impl Default for CronJobStatus {
@@ -80,6 +83,7 @@ impl Default for CronJobStatus {
             message: String::new(),
             last_successful_time: None,
             last_schedule_time: None,
+            next_schedule_time: None,
         }
     }
 }
@@ -126,6 +130,7 @@ impl CronJobStatus {
     printcolumn = r#"{"name":"Phase", "type":"string", "description":"phase of the job", "jsonPath":".status.phase"}"#,
     printcolumn = r#"{"name":"LastScheduleTime", "type":"string", "description":"last schedule time of the job", "jsonPath":".status.lastScheduleTime"}"#,
     printcolumn = r#"{"name":"LastSuccessfulTime", "type":"string", "description":"last successful time of the job", "jsonPath":".status.lastSuccessfulTime"}"#,
+    printcolumn = r#"{"name":"NextScheduleTime", "type":"string", "description":"next schedule time of the job", "jsonPath":".status.nextScheduleTime"}"#,
     status = "CronJobStatus"
 )]
 #[cel_validate(rule = Rule::new(r#"
@@ -248,8 +253,12 @@ impl CronJob {
                         return None;
                     }
                 }
-
-                next_time
+                self.spec
+                    .schedule
+                    .as_ref()
+                    .map(|s| s.next(execution_count, now, None))
+                    .flatten()
+                // next_time
             }
             Some(last_successful_time) => {
                 let last_time = last_successful_time;
