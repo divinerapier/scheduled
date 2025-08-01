@@ -97,6 +97,21 @@ impl CronJobReconciler {
 
         debug!("after record_missing_active_jobs");
 
+        // 检查是否所有jobs都完成且没有下一次调度时间
+        if cronjob.active_jobs_count() == 0 {
+            let now = Local::now();
+            if cronjob.next_schedule_time(now).is_none() {
+                info!(
+                    name,
+                    namespace, "All jobs completed and no next schedule time, marking as completed"
+                );
+                let status = cronjob.status.get_or_insert_default();
+                status.phase = CronJobPhase::Completed;
+                status.message = "All jobs completed and schedule has ended".to_string();
+                *update_status = true;
+            }
+        }
+
         Ok(cronjob)
     }
 
@@ -105,26 +120,54 @@ impl CronJobReconciler {
         cronjob: &mut CronJob,
         update_status: &mut bool,
     ) -> Result<(), Error> {
-        if let Some(active_jobs) = cronjob.active_jobs().map(Vec::from) {
-            for job_ref in active_jobs {
-                let namespace = job_ref.namespace.as_deref().unwrap_or_default();
-                let name = job_ref.name.as_deref().unwrap_or_default();
+        let name = cronjob.name_any();
+        let namespace = cronjob.namespace().unwrap_or_default();
 
-                match self.ctx.get::<Job>(namespace, name).await {
+        if let Some(active_jobs) = cronjob.active_jobs().map(Vec::from) {
+            info!(
+                name,
+                namespace,
+                active_jobs_count = active_jobs.len(),
+                "Checking active jobs for cleanup"
+            );
+
+            for job_ref in active_jobs {
+                let job_namespace = job_ref.namespace.as_deref().unwrap_or_default();
+                let job_name = job_ref.name.as_deref().unwrap_or_default();
+                let job_uid = job_ref.uid.as_deref().unwrap_or_default();
+
+                match self.ctx.get::<Job>(job_namespace, job_name).await {
                     Ok(job) => {
                         if conditions::is_job_finished(&job) {
-                            cronjob.delete_from_active_list(
-                                job_ref.uid.as_deref().unwrap_or_default(),
+                            info!(
+                                name,
+                                namespace,
+                                job_name,
+                                job_namespace,
+                                "Removing finished job from active list"
                             );
+                            cronjob.delete_from_active_list(job_uid);
                             *update_status = true;
+                        } else {
+                            debug!(
+                                name,
+                                namespace, job_name, job_namespace, "Job is still running"
+                            );
                         }
                     }
                     Err(Error::NotFound) => {
-                        cronjob.delete_from_active_list(job_ref.uid.as_deref().unwrap_or_default());
+                        info!(
+                            name,
+                            namespace,
+                            job_name,
+                            job_namespace,
+                            "Job not found, removing from active list"
+                        );
+                        cronjob.delete_from_active_list(job_uid);
                         *update_status = true;
                     }
                     Err(e) => {
-                        error!(name, namespace, error = ?e, "Error getting job");
+                        error!(name, namespace, job_name, job_namespace, error = ?e, "Error getting job");
                         return Err(e);
                     }
                 }
@@ -375,9 +418,26 @@ impl CronJobReconciler {
                 Action::requeue(next_time.signed_duration_since(now).to_std().unwrap())
             }
             None => {
+                // 统一的兜底校验：检查是否有正在运行的jobs
+                let has_active_jobs = cronjob.active_jobs_count() > 0;
                 let status = cronjob.status.get_or_insert_default();
-                status.phase = CronJobPhase::Completed;
-                status.message = "Cronjob has completed".to_string();
+
+                if has_active_jobs {
+                    info!(
+                        name,
+                        namespace,
+                        "No next schedule time but still have active jobs, keeping as Running"
+                    );
+                    status.phase = CronJobPhase::Running;
+                    status.message = "Waiting for active jobs to complete".to_string();
+                } else {
+                    info!(
+                        name,
+                        namespace, "No next schedule time and no active jobs, marking as Completed"
+                    );
+                    status.phase = CronJobPhase::Completed;
+                    status.message = "Cronjob has completed".to_string();
+                }
                 update_status = true;
                 Action::await_change()
             }
@@ -553,12 +613,20 @@ impl CronJobReconciler {
             // 当前时间晚于计算的最大调度截止时间，说明不在运行上次的任务
             if missed {
                 // 计算下一次的调度时间
-                let next_time = cronjob.next_schedule_time(now).unwrap();
-                let status = cronjob.status.get_or_insert_default();
-                status.next_schedule_time = Some(Time(next_time.to_utc()));
-                status.last_successful_time = Some(Time(now.to_utc()));
-                *update_status = true;
-                return Ok((Some(next_time), cronjob));
+                match cronjob.next_schedule_time(next_schedule_time) {
+                    Some(next_time) => {
+                        let status = cronjob.status.get_or_insert_default();
+                        status.next_schedule_time = Some(Time(next_time.to_utc()));
+                        status.last_successful_time = Some(Time(now.to_utc()));
+                        *update_status = true;
+                        return Ok((Some(next_time), cronjob));
+                    }
+                    None => {
+                        info!(name, namespace, "No next schedule time");
+                        cronjob.status.get_or_insert_default().phase = CronJobPhase::Completed;
+                        return Ok((None, cronjob));
+                    }
+                }
             }
             // 判断任务是否在运行
 
@@ -589,18 +657,6 @@ impl CronJobReconciler {
                 self.create_job(&mut cronjob, &next_time, update_status)
                     .await?;
 
-                // // 获取下一次任务执行的时间，如果 cronjob 已经结束，则返回 None
-                // let next_time = match cronjob.next_schedule_time(now) {
-                //     Some(next_time) => next_time,
-                //     None => {
-                //         info!(name, namespace, "No next schedule time");
-                //         cronjob.status.get_or_insert_default().phase = CronJobPhase::Completed;
-                //         return Ok((None, cronjob));
-                //     }
-                // };
-
-                // return Ok((Some(next_time), cronjob));
-
                 match cronjob.next_schedule_time(now) {
                     Some(next_time) => {
                         let status = cronjob.status.get_or_insert_default();
@@ -613,8 +669,15 @@ impl CronJobReconciler {
                         return Ok((Some(next_time), cronjob));
                     }
                     None => {
-                        info!(name, namespace, "No next schedule time");
-                        cronjob.status.get_or_insert_default().phase = CronJobPhase::Completed;
+                        info!(name, namespace, "No next schedule time, but job is running");
+                        // 即使没有下一次调度时间，如果当前有active jobs，也不应该立即标记为completed
+                        // 应该等待所有jobs完成后再标记为completed
+                        let status = cronjob.status.get_or_insert_default();
+                        status.phase = CronJobPhase::Running;
+                        status.last_successful_time = Some(Time(now.to_utc()));
+                        status.last_schedule_time = Some(Time(now.to_utc()));
+                        status.execution_count += 1;
+                        *update_status = true;
                         return Ok((None, cronjob));
                     }
                 }
@@ -637,8 +700,20 @@ impl CronJobReconciler {
             Some(next_time) => next_time,
             None => {
                 info!(name, namespace, "No next schedule time");
-                cronjob.status.get_or_insert_default().phase = CronJobPhase::Completed;
-                return Ok((None, cronjob));
+                // 检查是否还有active jobs，如果有则不应该立即标记为completed
+                if cronjob.active_jobs_count() > 0 {
+                    info!(
+                        name,
+                        namespace, "Still have active jobs, keeping as Running"
+                    );
+                    let status = cronjob.status.get_or_insert_default();
+                    status.phase = CronJobPhase::Running;
+                    *update_status = true;
+                    return Ok((None, cronjob));
+                } else {
+                    cronjob.status.get_or_insert_default().phase = CronJobPhase::Completed;
+                    return Ok((None, cronjob));
+                }
             }
         };
 
@@ -807,9 +882,21 @@ impl CronJobReconciler {
                     "Forbid concurrency policy, but there are active jobs, next_time: {}",
                     next_time
                 );
+                // 在Forbid策略中，如果有active jobs，需要清理已完成的jobs
+                // 但保持正在运行的jobs
+                self.cleanup_active_jobs_if_needed(cronjob, update_status)
+                    .await?;
                 Ok(cronjob.next_schedule_time_after(now, Some(next_time)))
             }
             ConcurrencyPolicy::Replace => {
+                // 先收集需要删除的job UIDs，避免借用冲突
+                let job_uids: Vec<String> = cronjob
+                    .active_jobs()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|j| j.uid.as_deref().unwrap_or_default().to_string())
+                    .collect();
+
                 for j in cronjob.active_jobs().unwrap_or_default() {
                     let namespace = j.namespace.as_deref().unwrap_or_default();
                     let name = j.name.as_deref().unwrap_or_default();
@@ -825,9 +912,52 @@ impl CronJobReconciler {
                     }
                     *update_status = true;
                 }
+
+                // 从active_jobs列表中移除被删除的job
+                for uid in job_uids {
+                    self.delete_from_active_list(cronjob, &uid);
+                }
+
                 Ok(Some(next_time))
             }
             _ => Ok(Some(next_time)),
         }
+    }
+
+    async fn cleanup_active_jobs_if_needed(
+        &self,
+        cronjob: &mut CronJob,
+        update_status: &mut bool,
+    ) -> Result<(), Error> {
+        let mut active_jobs_to_delete = vec![];
+
+        if let Some(active_jobs) = cronjob.active_jobs() {
+            for job_ref in active_jobs {
+                let namespace = job_ref.namespace.as_deref().unwrap_or_default();
+                let name = job_ref.name.as_deref().unwrap_or_default();
+                match self.ctx.get::<Job>(namespace, name).await {
+                    Ok(job) => {
+                        if conditions::is_job_finished(&job) {
+                            active_jobs_to_delete
+                                .push(job_ref.uid.as_deref().unwrap_or_default().to_string());
+                        }
+                    }
+                    Err(Error::NotFound) => {
+                        active_jobs_to_delete
+                            .push(job_ref.uid.as_deref().unwrap_or_default().to_string());
+                    }
+                    Err(e) => {
+                        error!(name, namespace, error = ?e, "Error getting job for cleanup");
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        for uid in active_jobs_to_delete {
+            self.delete_from_active_list(cronjob, &uid);
+        }
+        *update_status = true;
+        Ok(())
     }
 }

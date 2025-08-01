@@ -30,13 +30,13 @@ async fn main() {
                 )))
                 .schedule(
                     vec![
-                        ScheduleType::Daily(DailySchedule {
-                            time_points: vec![TimePoint {
-                                hour: 15,
-                                minute: 2,
-                            }],
-                        }),
-                        // ScheduleType::Interval(Interval { seconds: 30 }),
+                        // ScheduleType::Daily(DailySchedule {
+                        //     time_points: vec![TimePoint {
+                        //         hour: 14,
+                        //         minute: 24,
+                        //     }],
+                        // }),
+                        ScheduleType::Interval(Interval { seconds: 30 }),
                     ]
                     .into(),
                 )

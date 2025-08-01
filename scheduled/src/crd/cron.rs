@@ -204,14 +204,32 @@ impl CronJob {
     ) -> Option<DateTime<Local>> {
         let execution_count = self.status.get_or_insert_default().execution_count as u32;
 
-        if let Some(schedule) = self.spec.schedule.as_ref() {
-            if let Some(max_executions) = schedule.max_executions {
-                if execution_count == max_executions && self.active_jobs_count() > 0 {
-                    return Some(now + Duration::seconds(5 * 50));
+        // if let Some(schedule) = self.spec.schedule.as_ref() {
+        //     if let Some(max_executions) = schedule.max_executions {
+        //         if execution_count == max_executions && self.active_jobs_count() > 0 {
+        //             return Some(now + Duration::seconds(5 * 50));
+        //         }
+        //         if execution_count >= max_executions {
+        //             return None;
+        //         }
+        //     }
+        // }
+        match self.spec.schedule.as_ref() {
+            Some(schedule) => {
+                if let Some(max_executions) = schedule.max_executions {
+                    if execution_count == max_executions && self.active_jobs_count() > 0 {
+                        return Some(now + Duration::seconds(5 * 50));
+                    }
+                    if execution_count >= max_executions {
+                        return None;
+                    }
                 }
-                if execution_count >= max_executions {
+            }
+            None => {
+                if execution_count > 0 {
                     return None;
                 }
+                return self.creation_timestamp().map(|t| t.0.with_timezone(&Local));
             }
         }
 
